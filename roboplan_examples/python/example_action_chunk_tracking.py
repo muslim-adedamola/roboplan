@@ -45,18 +45,16 @@ from roboplan.optimal_ik import (
 ActionSpace = Literal["cartesian", "joint"]
 
 
-KINOVA_HOME_JOINT_ANGLES_DEG = np.array(
-    [0.0, 15.0, 180.0, 230.0, 0.0, 55.0, 90.0]
-)
+KINOVA_HOME_JOINT_ANGLES_DEG = np.array([0.0, 15.0, 180.0, 230.0, 0.0, 55.0, 90.0])
 
 
-#Wrap angles to [-pi, pi] without changing the represented pose.
+# Wrap angles to [-pi, pi] without changing the represented pose.
 def wrap_to_pi(angles: np.ndarray) -> np.ndarray:
     return np.arctan2(np.sin(angles), np.cos(angles))
 
 
-#Convert a 6D Cartesian delta into an SE(3) transform.
-#delta = [dx, dy, dz, droll, dpitch, dyaw]. Rotation is represented as small XYZ Euler increments.
+# Convert a 6D Cartesian delta into an SE(3) transform.
+# delta = [dx, dy, dz, droll, dpitch, dyaw]. Rotation is represented as small XYZ Euler increments.
 def se3_from_delta(delta: np.ndarray) -> pin.SE3:
 
     translation = np.asarray(delta[:3], dtype=float)
@@ -70,13 +68,13 @@ def se3_from_delta(delta: np.ndarray) -> pin.SE3:
     return pin.SE3(rotation, translation)
 
 
-#Linearly interpolate vector waypoints at a smaller control timestep.
+# Linearly interpolate vector waypoints at a smaller control timestep.
 def interpolate_scalar_waypoints(
     waypoints: list[np.ndarray],
     policy_dt: float,
     control_dt: float,
 ) -> list[np.ndarray]:
-    
+
     if len(waypoints) < 2:
         return waypoints
 
@@ -94,8 +92,7 @@ def interpolate_scalar_waypoints(
     return dense
 
 
-
-#Interpolate SE(3) waypoints using translation lerp and rotation slerp
+# Interpolate SE(3) waypoints using translation lerp and rotation slerp
 def interpolate_se3_waypoints(
     waypoints: list[np.ndarray],
     policy_dt: float,
@@ -125,15 +122,14 @@ def interpolate_se3_waypoints(
     return dense
 
 
-
-#Create a mock Cartesian action chunk of shape [horizon, 6]
+# Create a mock Cartesian action chunk of shape [horizon, 6]
 def make_mock_cartesian_action_chunk(
     horizon: int,
     translation_scale: float = 0.015,
     rotation_scale: float = 0.03,
     action_scale: float = 1.0,
 ) -> np.ndarray:
-    
+
     chunk = np.zeros((horizon, 6), dtype=float)
 
     # Move forward/up slightly, with a small yaw/roll change.
@@ -149,14 +145,14 @@ def make_mock_cartesian_action_chunk(
     return action_scale * chunk
 
 
-#Create a mock joint-space action chunk of shape [horizon, num_joints].
+# Create a mock joint-space action chunk of shape [horizon, num_joints].
 def make_mock_joint_action_chunk(
     horizon: int,
     num_joints: int,
     joint_delta_scale: float = 0.015,
     action_scale: float = 1.0,
 ) -> np.ndarray:
-    
+
     chunk = np.zeros((horizon, num_joints), dtype=float)
 
     for i in range(horizon):
@@ -167,14 +163,14 @@ def make_mock_joint_action_chunk(
     return action_scale * chunk
 
 
-#Accumulate Cartesian deltas into sparse end-effector target poses.
+# Accumulate Cartesian deltas into sparse end-effector target poses.
 def cartesian_chunk_to_sparse_targets(
     scene: Scene,
     q_start: np.ndarray,
     ee_frame_name: str,
     action_chunk: np.ndarray,
 ) -> list[np.ndarray]:
-    
+
     current_target = scene.forwardKinematics(q_start, ee_frame_name)
     targets = [current_target.copy()]
 
@@ -213,13 +209,13 @@ def joint_chunk_to_sparse_targets(
     return targets
 
 
-#Compute end-effector xyz positions for a sequence of full configurations
+# Compute end-effector xyz positions for a sequence of full configurations
 def compute_end_effector_positions(
     scene: Scene,
     configurations: list[np.ndarray],
     ee_frame_name: str,
 ) -> np.ndarray:
-    
+
     positions = []
 
     for q in configurations:
@@ -230,12 +226,12 @@ def compute_end_effector_positions(
     return np.asarray(positions)
 
 
-#Extract xyz positions from Cartesian SE(3) target transforms
+# Extract xyz positions from Cartesian SE(3) target transforms
 def cartesian_target_positions(target_transforms: list[np.ndarray]) -> np.ndarray:
     return np.asarray([np.asarray(tform)[:3, 3].copy() for tform in target_transforms])
 
 
-#Compute EE positions induced by full joint-space target configurations.
+# Compute EE positions induced by full joint-space target configurations.
 def joint_target_positions(
     scene: Scene,
     q_full_targets: list[np.ndarray],
@@ -291,8 +287,7 @@ def get_starting_configuration(
     return q_full
 
 
-
-#Draw a trajectory as straight line segments.
+# Draw a trajectory as straight line segments.
 def add_position_polyline(
     viz: ViserVisualizer,
     name: str,
@@ -328,9 +323,8 @@ def add_position_polyline(
         print(f"Warning: could not draw line-segment trace {name}: {exc}")
 
 
-
-#Visualize a 3D path and optional waypoint markers in Viser.
-#The trace is drawn as straight line segments.
+# Visualize a 3D path and optional waypoint markers in Viser.
+# The trace is drawn as straight line segments.
 def visualize_position_trace(
     viz: ViserVisualizer,
     positions: np.ndarray,
@@ -344,7 +338,7 @@ def visualize_position_trace(
     draw_waypoints: bool = True,
     waypoint_stride: int = 1,
 ):
-    
+
     if positions is None or len(positions) == 0:
         return
 
@@ -494,7 +488,9 @@ def main(
     num_variables = len(oink.v_indices)
     dt = 1.0 / control_freq
 
-    v_max = np.hstack([scene.getJointInfo(name).limits.max_velocity for name in joint_names])
+    v_max = np.hstack(
+        [scene.getJointInfo(name).limits.max_velocity for name in joint_names]
+    )
 
     constraints = [
         PositionLimit(oink, gain=1.0),
@@ -504,7 +500,9 @@ def main(
     print(f"Velocity variables: {num_variables}")
     print(f"Dense control dt: {dt:.4f} s")
     print(f"Sparse policy dt: {policy_dt:.4f} s")
-    print(f"Interpolation substeps per policy action: {max(1, int(round(policy_dt / dt)))}")
+    print(
+        f"Interpolation substeps per policy action: {max(1, int(round(policy_dt / dt)))}"
+    )
 
     # Configuration regularization task.
     joint_weights = np.full(num_variables, 0.05)
@@ -577,7 +575,9 @@ def main(
 
         # OInK's ConfigurationTask target lives in the active configuration
         # coordinates, while the visualization uses the full robot configurations.
-        dense_targets = [q_full_target[oink.q_indices] for q_full_target in dense_full_targets]
+        dense_targets = [
+            q_full_target[oink.q_indices] for q_full_target in dense_full_targets
+        ]
         sparse_targets = sparse_full_targets
 
         sparse_target_positions = joint_target_positions(
@@ -717,7 +717,9 @@ def main(
     print("  gray:   dense interpolated targets")
     print("  blue:   executed OInK-constrained trajectory")
     print("  red:    current end-effector position")
-    print("Use the Viser GUI buttons to animate, step through, or reset the trajectory.")
+    print(
+        "Use the Viser GUI buttons to animate, step through, or reset the trajectory."
+    )
 
     state = {
         "step_idx": 0,

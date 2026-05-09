@@ -266,9 +266,6 @@ def main(
     model_pin = pin.buildModelFromXML(urdf_xml)
     q_start = get_starting_configuration(scene, model_data)
 
-    # Fix scene at the selected model start configuration
-    scene.setJointPositions(q_start)
-
     # Build geometry models for visualization.
     collision_model = pin.buildGeomFromUrdfString(
         model_pin,
@@ -349,8 +346,6 @@ def main(
         tasks = [frame_task, config_task]
 
     else:
-        # Joint-space chunks are tangent-space increments, so generate them in
-        # velocity space and apply them with scene.integrate().
         action_chunk = make_mock_joint_action_chunk(
             chunk_horizon,
             num_joints=len(oink.v_indices),
@@ -489,15 +484,12 @@ def main(
     )
 
     current_ee_marker = None
-    try:
-        current_ee_marker = viz.viewer.scene.add_icosphere(
-            "/action_chunk/current_ee",
-            radius=0.025,
-            position=executed_ee_positions[0],
-            color=(255, 0, 0),
-        )
-    except Exception as exc:
-        print(f"Warning: could not draw current end-effector marker: {exc}")
+    current_ee_marker = viz.viewer.scene.add_icosphere(
+        "/action_chunk/current_ee",
+        radius=0.025,
+        position=executed_ee_positions[0],
+        color=(255, 0, 0),
+    )
 
     print("Visualization added:")
     print("  orange: sparse policy waypoints shown as small markers only")
@@ -522,9 +514,7 @@ def main(
         step_idx = max(0, min(step_idx, len(trajectory) - 1))
 
         viz.display(trajectory[step_idx])
-
-        if current_ee_marker is not None:
-            current_ee_marker.position = executed_ee_positions[step_idx]
+        current_ee_marker.position = executed_ee_positions[step_idx]
 
         state["step_idx"] = step_idx
 

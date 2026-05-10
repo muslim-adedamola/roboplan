@@ -5,21 +5,24 @@ short-horizon command sequence, interpolated at a smaller control timestep, and
 tracked through OInK for Cartesian actions or directly integrated for joint-space actions.
 
 Supported chunk types:
-  1. Cartesian/end-effector deltas: [dx, dy, dz, droll, dpitch, dyaw]
-  2. Joint-space deltas:          [dq_1, dq_2, ..., dq_n]
+  1. Cartesian/end-effector targets: sparse absolute SE(3) target poses
+  2. Joint-space targets: sparse absolute joint configurations
 
 The main idea is:
-  sparse policy action chunk
+  sparse policy-like action chunk
       -> sparse target poses/configurations
       -> dense interpolated targets at control_dt
       -> Cartesian actions: OInK tracking with PositionLimit + VelocityLimit
       -> joint-space actions: direct interpolated configuration trajectory
       -> visualization
+
+This is a single end effector example. For multi-arm models
+such as "dual", only the model's default joint group and first end-effector
+are commanded. Coordinated dual-arm tracking is a work in progress.
 """
 
 import sys
 import time
-from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
@@ -29,7 +32,7 @@ import xacro
 from pinocchio.visualize import ViserVisualizer
 
 from common import MODELS
-from roboplan.core import CartesianConfiguration, Scene
+from roboplan.core import CartesianConfiguration, JointTrajectory, Scene
 from roboplan.example_models import get_package_share_dir
 from roboplan.optimal_ik import (
     ConfigurationTask,
@@ -42,7 +45,7 @@ from roboplan.optimal_ik import (
 )
 
 from roboplan.interpolation import (
-    interpolateConfigurationWaypoints,
+    interpolateJointTrajectory,
     interpolateSE3Waypoints,
 )
 from roboplan.visualization import visualizePositionTrace
@@ -50,112 +53,89 @@ from roboplan.visualization import visualizePositionTrace
 ActionSpace = Literal["cartesian", "joint"]
 
 
-@dataclass
-class PlaybackState:
-    """Mutable GUI playback state shared by Viser callbacks."""
-
-    step_idx: int = 0
-    animating: bool = False
-
-
-# Convert a 6D Cartesian delta into an SE(3) transform.
-# delta = [dx, dy, dz, droll, dpitch, dyaw]. Rotation is represented as small XYZ Euler increments.
-def se3_from_delta(delta: np.ndarray) -> pin.SE3:
-
-    translation = np.asarray(delta[:3], dtype=float)
-    roll, pitch, yaw = np.asarray(delta[3:6], dtype=float)
-
-    rotation = (
-        pin.rpy.rpyToMatrix(np.array([roll, pitch, yaw], dtype=float))
-        if np.linalg.norm(delta[3:6]) > 0.0
-        else np.eye(3)
-    )
-    return pin.SE3(rotation, translation)
-
-
-# Create a mock Cartesian action chunk of shape [horizon, 6]
-def make_mock_cartesian_action_chunk(
-    horizon: int,
-    translation_scale: float = 0.04,
-    rotation_scale: float = 0.02,
-    action_scale: float = 1.0,
-) -> np.ndarray:
-
-    chunk = np.zeros((horizon, 6), dtype=float)
-
-    # Move mostly along the end-effector x-axis with a gentle sideways/downward
-    # curve. The default is intentionally long enough to make the tracking
-    # behavior visible in the viewer.
-    for i in range(horizon):
-        phase = (i + 1) / float(horizon)
-        chunk[i, 0] = translation_scale
-        chunk[i, 1] = 0.012 * np.sin(np.pi * phase)
-        chunk[i, 2] = -0.010 * np.sin(0.5 * np.pi * phase)
-        chunk[i, 3] = rotation_scale * 0.2
-        chunk[i, 4] = 0.0
-        chunk[i, 5] = rotation_scale * 0.2
-
-    return action_scale * chunk
-
-
-# Create a mock joint-space action chunk of shape [horizon, num_joints].
-def make_mock_joint_action_chunk(
-    horizon: int,
-    num_joints: int,
-    joint_delta_scale: float = 0.05,
-    action_scale: float = 1.0,
-) -> np.ndarray:
-
-    chunk = np.zeros((horizon, num_joints), dtype=float)
-
-    for i in range(horizon):
-        phase = (i + 1) / float(horizon)
-        direction = np.sin(np.linspace(0.0, np.pi, num_joints) + np.pi * phase)
-        chunk[i] = joint_delta_scale * direction
-
-    return action_scale * chunk
-
-
-# Accumulate Cartesian deltas into sparse end-effector target poses.
-def cartesian_chunk_to_sparse_targets(
+def make_mock_cartesian_target_poses(
     scene: Scene,
     q_start: np.ndarray,
     ee_frame_name: str,
-    action_chunk: np.ndarray,
+    horizon: int,
+    translation_scale: float = 0.04,
+    action_scale: float = 1.0,
 ) -> list[np.ndarray]:
+    """Create sparse absolute Cartesian target poses as 4x4 transforms.
 
-    current_target = scene.forwardKinematics(q_start, ee_frame_name)
-    targets = [current_target.copy()]
+    Args:
+        scene: RoboPlan scene used to compute the starting end-effector pose.
+        q_start: Full starting robot configuration.
+        ee_frame_name: End-effector frame name.
+        horizon: Number of sparse target poses after the starting pose.
+        translation_scale: Per-step translation scale in meters.
+        action_scale: Scale applied to the mock Cartesian target path.
 
-    target_se3 = pin.SE3(current_target)
-    for delta in action_chunk:
-        target_se3 = target_se3 * se3_from_delta(delta)
-        targets.append(target_se3.homogeneous.copy())
+    Returns:
+        Sparse absolute Cartesian target poses as 4x4 homogeneous matrices.
+    """
+    start_pose = scene.forwardKinematics(q_start, ee_frame_name)
+    start_rotation = start_pose[:3, :3]
+    start_translation = start_pose[:3, 3]
+
+    targets = [start_pose.copy()]
+
+    for i in range(horizon):
+        phase = (i + 1) / float(horizon)
+
+        local_translation_offset = action_scale * np.array(
+            [
+                translation_scale * (i + 1),
+                0.012 * np.sin(np.pi * phase),
+                -0.010 * np.sin(0.5 * np.pi * phase),
+            ],
+            dtype=float,
+        )
+
+        # Keep the orientation fixed in the default mock target path; the targets are
+        # still full 4x4 transforms, so orientation can be varied by changing these matrices.
+        target = np.eye(4)
+        target[:3, :3] = start_rotation
+        target[:3, 3] = start_translation + start_rotation @ local_translation_offset
+
+        targets.append(target)
 
     return targets
 
 
-def joint_chunk_to_sparse_targets(
+def make_mock_joint_targets(
     scene: Scene,
-    q_full_start: np.ndarray,
+    q_start: np.ndarray,
     v_indices: np.ndarray,
     num_velocity_variables: int,
-    action_chunk: np.ndarray,
+    horizon: int,
+    joint_delta_scale: float = 0.05,
+    action_scale: float = 1.0,
 ) -> list[np.ndarray]:
-    """Accumulate joint-space deltas into sparse full-configuration targets.
+    """Create sparse absolute joint-space targets.
 
-    The joint-space action chunk lives in the robot tangent/velocity space, not
-    directly in configuration space. Therefore, each delta is lifted into the full
-    velocity vector and applied using scene.integrate().
+    Args:
+        scene: RoboPlan scene used to integrate joint offsets.
+        q_start: Full starting robot configuration.
+        v_indices: Velocity indices for the selected joint group.
+        num_velocity_variables: Size of the full robot velocity/tangent vector.
+        horizon: Number of sparse target configurations after the start.
+        joint_delta_scale: Scale of the joint-space target offsets.
+        action_scale: Scale applied to the mock joint target path.
+
+    Returns:
+        Sparse full-configuration joint targets.
     """
-    targets = [np.asarray(q_full_start, dtype=float).copy()]
-    q_target = np.asarray(q_full_start, dtype=float).copy()
+    targets = [q_start.copy()]
 
-    for delta_group in action_chunk:
+    for i in range(horizon):
+        phase = (i + 1) / float(horizon)
+        direction = np.sin(np.linspace(0.0, np.pi, len(v_indices)) + np.pi * phase)
+
         delta_full = np.zeros(num_velocity_variables)
-        delta_full[v_indices] = np.asarray(delta_group, dtype=float)
-        q_target = scene.integrate(q_target, delta_full)
-        targets.append(q_target.copy())
+        delta_full[v_indices] = action_scale * joint_delta_scale * (i + 1) * direction
+
+        targets.append(scene.integrate(q_start, delta_full))
 
     return targets
 
@@ -170,16 +150,17 @@ def compute_end_effector_positions(
     positions = []
 
     for q in configurations:
-        scene.setJointPositions(q)
         ee_tform = scene.forwardKinematics(q, ee_frame_name)
         positions.append(ee_tform[:3, 3].copy())
 
     return np.asarray(positions)
 
 
-# Extract xyz positions from Cartesian SE(3) target transforms
-def cartesian_target_positions(target_transforms: list[np.ndarray]) -> np.ndarray:
-    return np.asarray([np.asarray(tform)[:3, 3].copy() for tform in target_transforms])
+# Extract xyz positions from full Cartesian SE(3) targets just for trace visualization.
+def cartesian_target_positions_for_visualization(
+    target_transforms: list[np.ndarray],
+) -> np.ndarray:
+    return np.asarray([tform[:3, 3].copy() for tform in target_transforms])
 
 
 # Return the starting configuration for the selected model.
@@ -221,8 +202,8 @@ def main(
     Args:
         model: Robot model name from roboplan_examples/python/common.py.
         action_space: Whether to use Cartesian or joint-space mock action chunks.
-        chunk_horizon: Number of sparse actions produced by the mock policy.
-        action_scale: Scale applied to the mock action chunk to make the motion shorter or longer.
+        chunk_horizon: Number of sparse targets in the mock policy-like chunk.
+        action_scale: Scale applied to the mock target chunk to make the motion shorter or longer.
         segment_time: Duration between consecutive sparse action waypoints, in seconds.
         control_freq: Dense interpolation/tracking frequency, in Hz.
         task_gain: Cartesian OInK task gain.
@@ -304,8 +285,6 @@ def main(
 
     ee_frame_name = model_data.ee_names[0]
 
-    # This example tracks one selected end-effector group.
-
     if action_space == "cartesian":
         oink = Oink(scene, joint_group)
         num_variables = len(oink.v_indices)
@@ -341,41 +320,40 @@ def main(
         goal.tip_frame = ee_frame_name
         frame_task = FrameTask(oink, scene, goal, task_options)
 
-        action_chunk = make_mock_cartesian_action_chunk(
-            chunk_horizon,
-            action_scale=action_scale,
-        )
-        sparse_targets = cartesian_chunk_to_sparse_targets(
-            scene,
-            q_start,
-            ee_frame_name,
-            action_chunk,
+        sparse_targets = make_mock_cartesian_target_poses(
+            scene, q_start, ee_frame_name, chunk_horizon, action_scale=action_scale
         )
         dense_targets = interpolateSE3Waypoints(sparse_targets, segment_time, dt)
-        sparse_target_positions = cartesian_target_positions(sparse_targets)
-        dense_target_positions = cartesian_target_positions(dense_targets)
+        sparse_target_positions = cartesian_target_positions_for_visualization(
+            sparse_targets
+        )
+        dense_target_positions = cartesian_target_positions_for_visualization(
+            dense_targets
+        )
         tasks = [frame_task, config_task]
 
     else:
         joint_group_info = scene.getJointGroupInfo(joint_group)
         joint_velocity_indices = np.asarray(joint_group_info.v_indices)
 
-        action_chunk = make_mock_joint_action_chunk(
-            chunk_horizon,
-            num_joints=len(joint_velocity_indices),
-            action_scale=action_scale,
-        )
-        sparse_targets = joint_chunk_to_sparse_targets(
+        sparse_targets = make_mock_joint_targets(
             scene,
             q_start,
             joint_velocity_indices,
             model_pin.nv,
-            action_chunk,
+            chunk_horizon,
+            action_scale=action_scale,
         )
-        dense_targets = interpolateConfigurationWaypoints(
+        sparse_trajectory = JointTrajectory()
+        sparse_trajectory.joint_names = joint_names
+        sparse_trajectory.times = [
+            idx * segment_time for idx in range(len(sparse_targets))
+        ]
+        sparse_trajectory.positions = sparse_targets
+
+        dense_targets = interpolateJointTrajectory(
             scene,
-            sparse_targets,
-            segment_time,
+            sparse_trajectory,
             dt,
         )
 
@@ -390,10 +368,10 @@ def main(
 
     # Trajectory rollout starts from the fixed start configuration.
     scene.setJointPositions(q_start)
-    q_current = q_start.copy()
-    trajectory = [q_current.copy()]
 
     if action_space == "cartesian":
+        q_current = q_start.copy()
+        trajectory = [q_current.copy()]
         delta_q = np.zeros(num_variables, dtype=float)
         delta_q_full = np.zeros(model_pin.nv, dtype=float)
 
@@ -495,59 +473,67 @@ def main(
     else:
         print("  blue:   executed joint-space trajectory")
     print("  red:    current end-effector position")
-    print(
-        "Use the Viser GUI buttons to animate, step through, or reset the trajectory."
-    )
+    print("Use the Viser GUI controls to animate, scrub, or reset the trajectory.")
 
-    state = PlaybackState()
+    animating = False
 
     animate_button = viz.viewer.gui.add_button("Animate action chunk")
-    step_button = viz.viewer.gui.add_button("Step once")
     reset_button = viz.viewer.gui.add_button("Reset")
+    step_slider = viz.viewer.gui.add_slider(
+        "Trajectory step",
+        min=0,
+        max=len(trajectory) - 1,
+        step=1,
+        initial_value=0,
+    )
 
-    def display_step(step_idx: int):
+    def display_step(target_step_idx: int, update_slider: bool = True):
         """Display one tracked configuration by index."""
-        step_idx = max(0, min(step_idx, len(trajectory) - 1))
 
-        viz.display(trajectory[step_idx])
-        current_ee_marker.position = executed_ee_positions[step_idx]
+        target_step_idx = max(0, min(target_step_idx, len(trajectory) - 1))
 
-        state.step_idx = step_idx
+        viz.display(trajectory[target_step_idx])
+        current_ee_marker.position = executed_ee_positions[target_step_idx]
+
+        if update_slider:
+            step_slider.value = target_step_idx
 
     @animate_button.on_click
     def animate_action_chunk(_):
-        if state.animating:
+
+        nonlocal animating
+        if animating:
             return
 
-        state.animating = True
+        animating = True
         animate_button.disabled = True
-        step_button.disabled = True
+        step_slider.disabled = True
         reset_button.disabled = True
 
-        if state.step_idx >= len(trajectory) - 1:
-            state.step_idx = 0
+        start_step_idx = int(step_slider.value)
+        if start_step_idx >= len(trajectory) - 1:
+            start_step_idx = 0
 
         try:
-            for idx in range(state.step_idx, len(trajectory)):
+            for idx in range(start_step_idx, len(trajectory)):
                 display_step(idx)
                 time.sleep(animation_dt)
         finally:
-            state.animating = False
+            animating = False
             animate_button.disabled = False
-            step_button.disabled = False
+            step_slider.disabled = False
             reset_button.disabled = False
 
-    @step_button.on_click
-    def step_once(_):
-        if state.animating:
+    @step_slider.on_update
+    def update_step_from_slider(_):
+        if animating:
             return
 
-        next_idx = min(state.step_idx + 1, len(trajectory) - 1)
-        display_step(next_idx)
+        display_step(int(step_slider.value), update_slider=False)
 
     @reset_button.on_click
     def reset(_):
-        if state.animating:
+        if animating:
             return
 
         display_step(0)

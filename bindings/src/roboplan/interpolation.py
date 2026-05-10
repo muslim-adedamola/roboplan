@@ -3,7 +3,7 @@ import math
 import numpy as np
 import pinocchio as pin
 
-from roboplan.core import Scene
+from roboplan.core import JointTrajectory, Scene
 
 
 def computeStepsPerSegment(segment_time: float, control_dt: float) -> int:
@@ -50,6 +50,56 @@ def interpolateConfigurationWaypoints(
     for idx in range(len(waypoints) - 1):
         start = waypoints[idx]
         end = waypoints[idx + 1]
+
+        for step in range(steps_per_segment + 1):
+            if idx > 0 and step == 0:
+                continue
+
+            alpha = step / steps_per_segment
+            dense_waypoints.append(scene.interpolate(start, end, alpha))
+
+    return dense_waypoints
+
+
+def interpolateJointTrajectory(
+    scene: Scene,
+    trajectory: JointTrajectory,
+    control_dt: float,
+) -> list[np.ndarray]:
+    """Interpolate a JointTrajectory using its waypoint times.
+
+    Args:
+        scene: RoboPlan scene used to interpolate between configurations.
+        trajectory: Sparse joint trajectory with positions and waypoint times.
+        control_dt: Desired interpolation sample period, in seconds.
+
+    Returns:
+        Dense configuration waypoints sampled according to the trajectory times.
+    """
+    if control_dt <= 0.0:
+        raise ValueError("control_dt must be positive.")
+
+    if len(trajectory.positions) != len(trajectory.times):
+        raise ValueError(
+            "JointTrajectory positions and times must have the same length."
+        )
+
+    if len(trajectory.positions) < 2:
+        return [np.asarray(position).copy() for position in trajectory.positions]
+
+    dense_waypoints = []
+
+    for idx in range(len(trajectory.positions) - 1):
+        # JointTrajectory.positions comes from nanobind/Eigen vectors, so convert
+        # each position to a NumPy array before using Scene.interpolate().
+        start = np.asarray(trajectory.positions[idx])
+        end = np.asarray(trajectory.positions[idx + 1])
+        segment_time = trajectory.times[idx + 1] - trajectory.times[idx]
+
+        if segment_time <= 0.0:
+            raise ValueError("JointTrajectory times must be strictly increasing.")
+
+        steps_per_segment = computeStepsPerSegment(segment_time, control_dt)
 
         for step in range(steps_per_segment + 1):
             if idx > 0 and step == 0:

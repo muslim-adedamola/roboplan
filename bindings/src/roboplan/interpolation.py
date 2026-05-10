@@ -113,14 +113,14 @@ def interpolateJointTrajectory(
 
 def interpolateSE3Waypoints(
     transforms: list[np.ndarray],
-    segment_time: float,
+    waypoint_times: list[float],
     control_dt: float,
 ) -> list[np.ndarray]:
     """Interpolate SE(3) waypoints using Pinocchio SE(3) interpolation.
 
     Args:
         transforms: Sparse SE(3) waypoints as 4x4 homogeneous matrices.
-        segment_time: Duration of each waypoint-to-waypoint segment, in seconds.
+        waypoint_times: End time of each waypoint, in seconds.
         control_dt: Desired interpolation sample period, in seconds.
 
     Returns:
@@ -130,14 +130,16 @@ def interpolateSE3Waypoints(
     if len(transforms) < 2:
         return transforms.copy()
 
-    steps_per_segment = computeStepsPerSegment(segment_time, control_dt)
+    transforms_se3 = [pin.SE3(tform) for tform in transforms]
     dense_transforms = []
 
     for idx in range(len(transforms) - 1):
-        start = pin.SE3(transforms[idx])
-        end = pin.SE3(transforms[idx + 1])
-
+        start = transforms_se3[idx]
+        end = transforms_se3[idx + 1]
+        segment_time = waypoint_times[idx + 1] - waypoint_times[idx]
+        steps_per_segment = computeStepsPerSegment(segment_time, control_dt)
         for step in range(steps_per_segment + 1):
+            # Ensure waypoints are not duplicated.
             if idx > 0 and step == 0:
                 continue
 

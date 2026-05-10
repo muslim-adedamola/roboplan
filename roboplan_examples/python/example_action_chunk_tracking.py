@@ -31,9 +31,13 @@ import tyro
 import xacro
 from pinocchio.visualize import ViserVisualizer
 
-from common import MODELS
+from common import MODELS, RobotModelConfig
 from roboplan.core import CartesianConfiguration, JointTrajectory, Scene
 from roboplan.example_models import get_package_share_dir
+from roboplan.interpolation import (
+    interpolateJointTrajectory,
+    interpolateSE3Waypoints,
+)
 from roboplan.optimal_ik import (
     ConfigurationTask,
     ConfigurationTaskOptions,
@@ -42,11 +46,6 @@ from roboplan.optimal_ik import (
     Oink,
     PositionLimit,
     VelocityLimit,
-)
-
-from roboplan.interpolation import (
-    interpolateJointTrajectory,
-    interpolateSE3Waypoints,
 )
 from roboplan.visualization import visualizePositionTrace
 
@@ -127,28 +126,34 @@ def make_mock_joint_targets(
         Sparse full-configuration joint targets.
     """
     targets = [q_start.copy()]
+    delta_full = np.zeros(num_velocity_variables)
 
     for i in range(horizon):
         phase = (i + 1) / float(horizon)
         direction = np.sin(np.linspace(0.0, np.pi, len(v_indices)) + np.pi * phase)
-
-        delta_full = np.zeros(num_velocity_variables)
         delta_full[v_indices] = action_scale * joint_delta_scale * (i + 1) * direction
-
         targets.append(scene.integrate(q_start, delta_full))
 
     return targets
 
 
-# Compute end-effector xyz positions for a sequence of full configurations
 def compute_end_effector_positions(
     scene: Scene,
     configurations: list[np.ndarray],
     ee_frame_name: str,
 ) -> np.ndarray:
+    """
+    Compute end-effector xyz positions for a sequence of full configurations.
 
+    Args:
+        scene: RoboPlan scene used to perform forward kinematics.
+        configurations: List of joint configurations to evaluate.
+        ee_frame_name: The name of the end effector frame.
+
+    Returns:
+        End effector position vectors corresponding to the joint configurations.
+    """
     positions = []
-
     for q in configurations:
         ee_tform = scene.forwardKinematics(q, ee_frame_name)
         positions.append(ee_tform[:3, 3].copy())
@@ -156,18 +161,35 @@ def compute_end_effector_positions(
     return np.asarray(positions)
 
 
-# Extract xyz positions from full Cartesian SE(3) targets just for trace visualization.
 def cartesian_target_positions_for_visualization(
     target_transforms: list[np.ndarray],
 ) -> np.ndarray:
+    """
+    Extract xyz positions from full Cartesian SE(3) targets just for trace visualization.
+
+    Args:
+        target_transforms: List of full transformation matrices for the end effector.
+
+    Returns:
+        End effector position vectors corresponding to the full transforms.
+    """
     return np.asarray([tform[:3, 3].copy() for tform in target_transforms])
 
 
-# Return the starting configuration for the selected model.
 def get_starting_configuration(
     scene: Scene,
-    model_data,
+    model_data: RobotModelConfig,
 ) -> np.ndarray:
+    """
+    Return the starting configuration for the selected model.
+
+    Args:
+        scene: The scene to use to extract current joint positions.
+        model_data: The robot model configuration with example-specific information.
+
+    Returns:
+        The starting joint positions for the specified robot.
+    """
 
     q_full = scene.getCurrentJointPositions()
     q_start_full = np.array(model_data.starting_joint_config)
@@ -325,7 +347,8 @@ def main(
         sparse_targets = make_mock_cartesian_target_poses(
             scene, q_start, ee_frame_name, chunk_horizon, action_scale=action_scale
         )
-        dense_targets = interpolateSE3Waypoints(sparse_targets, segment_time, dt)
+        segment_times = [segment_time * idx for idx in range(len(sparse_targets))]
+        dense_targets = interpolateSE3Waypoints(sparse_targets, segment_times, dt)
         sparse_target_positions = cartesian_target_positions_for_visualization(
             sparse_targets
         )
@@ -334,7 +357,7 @@ def main(
         )
         tasks = [frame_task, config_task]
 
-    else:
+    else:  # Joint action space
         joint_group_info = scene.getJointGroupInfo(joint_group)
         joint_velocity_indices = np.asarray(joint_group_info.v_indices)
 

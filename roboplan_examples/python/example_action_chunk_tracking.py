@@ -1,8 +1,8 @@
 """
-Track mock learned policy action chunks with RoboPlan OInK.
+Track mock learned policy action chunks.
 This example demonstrates how a learned policy action chunk can be treated as a
 short-horizon command sequence, interpolated at a smaller control timestep, and
-tracked through OInK while respecting robot position and velocity limits.
+tracked through OInK for Cartesian actions or directly integrated for joint-space actions.
 
 Supported chunk types:
   1. Cartesian/end-effector deltas: [dx, dy, dz, droll, dpitch, dyaw]
@@ -12,13 +12,14 @@ The main idea is:
   sparse policy action chunk
       -> sparse target poses/configurations
       -> dense interpolated targets at control_dt
-      -> OInK tracking with PositionLimit + VelocityLimit
-      -> integrated constrained trajectory
+      -> Cartesian actions: OInK tracking with PositionLimit + VelocityLimit
+      -> joint-space actions: direct interpolated configuration trajectory
       -> visualization
 """
 
 import sys
 import time
+from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
@@ -49,6 +50,14 @@ from roboplan.visualization import visualizePositionTrace
 ActionSpace = Literal["cartesian", "joint"]
 
 
+@dataclass
+class PlaybackState:
+    """Mutable GUI playback state shared by Viser callbacks."""
+
+    step_idx: int = 0
+    animating: bool = False
+
+
 # Convert a 6D Cartesian delta into an SE(3) transform.
 # delta = [dx, dy, dz, droll, dpitch, dyaw]. Rotation is represented as small XYZ Euler increments.
 def se3_from_delta(delta: np.ndarray) -> pin.SE3:
@@ -67,22 +76,24 @@ def se3_from_delta(delta: np.ndarray) -> pin.SE3:
 # Create a mock Cartesian action chunk of shape [horizon, 6]
 def make_mock_cartesian_action_chunk(
     horizon: int,
-    translation_scale: float = 0.015,
-    rotation_scale: float = 0.03,
+    translation_scale: float = 0.04,
+    rotation_scale: float = 0.02,
     action_scale: float = 1.0,
 ) -> np.ndarray:
 
     chunk = np.zeros((horizon, 6), dtype=float)
 
-    # Move forward/up slightly, with a small yaw/roll change.
+    # Move mostly along the end-effector x-axis with a gentle sideways/downward
+    # curve. The default is intentionally long enough to make the tracking
+    # behavior visible in the viewer.
     for i in range(horizon):
         phase = (i + 1) / float(horizon)
         chunk[i, 0] = translation_scale
-        chunk[i, 1] = 0.003 * np.sin(np.pi * phase)
-        chunk[i, 2] = 0.006 * np.sin(0.5 * np.pi * phase)
+        chunk[i, 1] = 0.012 * np.sin(np.pi * phase)
+        chunk[i, 2] = -0.010 * np.sin(0.5 * np.pi * phase)
         chunk[i, 3] = rotation_scale * 0.2
         chunk[i, 4] = 0.0
-        chunk[i, 5] = rotation_scale * 0.3
+        chunk[i, 5] = rotation_scale * 0.2
 
     return action_scale * chunk
 
@@ -91,7 +102,7 @@ def make_mock_cartesian_action_chunk(
 def make_mock_joint_action_chunk(
     horizon: int,
     num_joints: int,
-    joint_delta_scale: float = 0.015,
+    joint_delta_scale: float = 0.05,
     action_scale: float = 1.0,
 ) -> np.ndarray:
 
@@ -99,7 +110,7 @@ def make_mock_joint_action_chunk(
 
     for i in range(horizon):
         phase = (i + 1) / float(horizon)
-        direction = np.sin(np.linspace(0.0, np.pi, num_joints) + phase)
+        direction = np.sin(np.linspace(0.0, np.pi, num_joints) + np.pi * phase)
         chunk[i] = joint_delta_scale * direction
 
     return action_scale * chunk
@@ -190,46 +201,35 @@ def get_starting_configuration(
     return q_full
 
 
-# Create an OInK solver from a fixed starting configuration
-def create_oink_solver(
-    scene: Scene,
-    joint_group: str,
-    q_start: np.ndarray,
-) -> Oink:
-
-    scene.setJointPositions(q_start)
-    return Oink(scene, joint_group)
-
-
 def main(
-    model: str = "kinova",
+    model: str = "ur5",
     action_space: ActionSpace = "cartesian",
     chunk_horizon: int = 6,
     action_scale: float = 1.0,
-    policy_dt: float = 0.2,
+    segment_time: float = 0.2,
     control_freq: float = 100.0,
     task_gain: float = 1.0,
     lm_damping: float = 0.01,
     regularization: float = 1e-6,
     sleep: bool = False,
-    animation_dt: float = 0.03,
+    playback_speed: float = 1.0,
     host: str = "localhost",
     port: str = "8000",
 ):
-    """Track a mock policy action chunk with OInK and velocity limits.
+    """Track a mock policy action chunk.
 
     Args:
         model: Robot model name from roboplan_examples/python/common.py.
         action_space: Whether to use Cartesian or joint-space mock action chunks.
         chunk_horizon: Number of sparse actions produced by the mock policy.
         action_scale: Scale applied to the mock action chunk to make the motion shorter or longer.
-        policy_dt: Time between sparse policy actions, in seconds.
-        control_freq: Dense OInK tracking frequency, in Hz.
-        task_gain: OInK task gain.
-        lm_damping: Levenberg-Marquardt damping for the frame task.
-        regularization: Tikhonov regularization passed to OInK.
+        segment_time: Duration between consecutive sparse action waypoints, in seconds.
+        control_freq: Dense interpolation/tracking frequency, in Hz.
+        task_gain: Cartesian OInK task gain.
+        lm_damping: Cartesian frame-task Levenberg-Marquardt damping.
+        regularization: Tikhonov regularization passed to OInK in Cartesian mode.
         sleep: If true, sleep between dense tracking steps while initially generating the trajectory.
-        animation_dt: Delay between displayed configurations when using the GUI animation button.
+        playback_speed: Playback speed multiplier for GUI animation.
         host: Viser host.
         port: Viser port.
     """
@@ -245,7 +245,7 @@ def main(
     srdf_xml = xacro.process_file(model_data.srdf_path).toxml()
 
     scene = Scene(
-        "policy_action_chunk_oink_scene",
+        "policy_action_chunk_scene",
         urdf=urdf_xml,
         srdf=srdf_xml,
         package_paths=package_paths,
@@ -284,52 +284,63 @@ def main(
     viz.initViewer(open=True, loadModel=True, host=host, port=port)
     viz.display(q_start)
 
-    # Set up OInK after fixing the scene at the selected start configuration.
-    oink = create_oink_solver(scene, joint_group, q_start)
-    num_variables = len(oink.v_indices)
+    scene.setJointPositions(q_start)
+
+    if control_freq <= 0.0:
+        raise ValueError("control_freq must be positive.")
+    if segment_time <= 0.0:
+        raise ValueError("segment_time must be positive.")
+    if playback_speed <= 0.0:
+        raise ValueError("playback_speed must be positive.")
+
     dt = 1.0 / control_freq
+    animation_dt = dt / playback_speed
 
-    v_max = np.hstack(
-        [scene.getJointInfo(name).limits.max_velocity for name in joint_names]
-    )
-
-    constraints = [
-        PositionLimit(oink, gain=1.0),
-        VelocityLimit(oink, dt, v_max),
-    ]
-
-    print(f"Velocity variables: {num_variables}")
     print(f"Dense control dt: {dt:.4f} s")
-    print(f"Sparse policy dt: {policy_dt:.4f} s")
+    print(f"Sparse segment time: {segment_time:.4f} s")
     print(
-        f"Interpolation substeps per policy action: {max(1, int(round(policy_dt / dt)))}"
+        f"Interpolation intervals per segment: {max(1, int(np.ceil(segment_time / dt)))}"
     )
 
-    # Configuration regularization task.
-    joint_weights = np.full(num_variables, 0.05)
-    config_options = ConfigurationTaskOptions(task_gain=0.1, lm_damping=0.0)
-    config_task = ConfigurationTask(
-        oink,
-        q_start[oink.q_indices],
-        joint_weights,
-        config_options,
-    )
-
-    # Frame task for Cartesian tracking.
     ee_frame_name = model_data.ee_names[0]
-    task_options = FrameTaskOptions(
-        position_cost=1.0,
-        orientation_cost=0.1,
-        task_gain=task_gain,
-        lm_damping=lm_damping,
-    )
 
-    goal = CartesianConfiguration()
-    goal.base_frame = model_data.base_link
-    goal.tip_frame = ee_frame_name
-    frame_task = FrameTask(oink, scene, goal, task_options)
+    # This example tracks one selected end-effector group.
 
     if action_space == "cartesian":
+        oink = Oink(scene, joint_group)
+        num_variables = len(oink.v_indices)
+
+        v_max = np.hstack(
+            [scene.getJointInfo(name).limits.max_velocity for name in joint_names]
+        )
+        constraints = [
+            PositionLimit(oink, gain=1.0),
+            VelocityLimit(oink, dt, v_max),
+        ]
+
+        print(f"Velocity variables: {num_variables}")
+
+        joint_weights = np.full(num_variables, 0.05)
+        config_options = ConfigurationTaskOptions(task_gain=0.1, lm_damping=0.0)
+        config_task = ConfigurationTask(
+            oink,
+            q_start[oink.q_indices],
+            joint_weights,
+            config_options,
+        )
+
+        task_options = FrameTaskOptions(
+            position_cost=1.0,
+            orientation_cost=0.1,
+            task_gain=task_gain,
+            lm_damping=lm_damping,
+        )
+
+        goal = CartesianConfiguration()
+        goal.base_frame = model_data.base_link
+        goal.tip_frame = ee_frame_name
+        frame_task = FrameTask(oink, scene, goal, task_options)
+
         action_chunk = make_mock_cartesian_action_chunk(
             chunk_horizon,
             action_scale=action_scale,
@@ -340,99 +351,85 @@ def main(
             ee_frame_name,
             action_chunk,
         )
-        dense_targets = interpolateSE3Waypoints(sparse_targets, policy_dt, dt)
+        dense_targets = interpolateSE3Waypoints(sparse_targets, segment_time, dt)
         sparse_target_positions = cartesian_target_positions(sparse_targets)
         dense_target_positions = cartesian_target_positions(dense_targets)
         tasks = [frame_task, config_task]
 
     else:
+        joint_group_info = scene.getJointGroupInfo(joint_group)
+        joint_velocity_indices = np.asarray(joint_group_info.v_indices)
+
         action_chunk = make_mock_joint_action_chunk(
             chunk_horizon,
-            num_joints=len(oink.v_indices),
+            num_joints=len(joint_velocity_indices),
             action_scale=action_scale,
         )
-        sparse_full_targets = joint_chunk_to_sparse_targets(
+        sparse_targets = joint_chunk_to_sparse_targets(
             scene,
             q_start,
-            oink.v_indices,
+            joint_velocity_indices,
             model_pin.nv,
             action_chunk,
         )
-        dense_full_targets = interpolateConfigurationWaypoints(
+        dense_targets = interpolateConfigurationWaypoints(
             scene,
-            sparse_full_targets,
-            policy_dt,
+            sparse_targets,
+            segment_time,
             dt,
         )
 
-        # OInK's ConfigurationTask target lives in the active configuration
-        # coordinates, while the visualization uses the full robot configurations.
-        dense_targets = [
-            q_full_target[oink.q_indices] for q_full_target in dense_full_targets
-        ]
-        sparse_targets = sparse_full_targets
-
         sparse_target_positions = compute_end_effector_positions(
-            scene, sparse_full_targets, ee_frame_name
+            scene, sparse_targets, ee_frame_name
         )
         dense_target_positions = compute_end_effector_positions(
-            scene, dense_full_targets, ee_frame_name
+            scene, dense_targets, ee_frame_name
         )
-
     print(f"Sparse targets: {len(sparse_targets)}")
     print(f"Dense targets:  {len(dense_targets)}")
 
     # Trajectory rollout starts from the fixed start configuration.
     scene.setJointPositions(q_start)
     q_current = q_start.copy()
-    delta_q = np.zeros(num_variables, dtype=float)
-    delta_q_full = np.zeros(model_pin.nv, dtype=float)
     trajectory = [q_current.copy()]
 
-    for idx, target in enumerate(dense_targets):
-        loop_start = time.time()
+    if action_space == "cartesian":
+        delta_q = np.zeros(num_variables, dtype=float)
+        delta_q_full = np.zeros(model_pin.nv, dtype=float)
 
-        if action_space == "cartesian":
+        for idx, target in enumerate(dense_targets):
+            loop_start = time.time()
+
             frame_task.setTargetFrameTransform(target)
-            active_tasks = tasks
-        else:
-            # ConfigurationTask currently has no Python-side target setter, so
-            # recreate the task for each dense target. This is cheap enough for
-            # an example and keeps joint-space tracking compatible with the
-            # current RoboPlan Python bindings.
-            target_config_task = ConfigurationTask(
-                oink,
-                np.asarray(target, dtype=float),
-                joint_weights,
-                config_options,
-            )
-            active_tasks = [target_config_task]
 
-        try:
-            oink.solveIk(scene, active_tasks, constraints, delta_q, regularization)
-        except RuntimeError as exc:
-            print(f"Warning: OInK failed at dense step {idx}: {exc}")
-            delta_q[:] = 0.0
+            try:
+                oink.solveIk(scene, tasks, constraints, delta_q, regularization)
+            except RuntimeError as exc:
+                print(f"Warning: OInK failed at dense step {idx}: {exc}")
+                delta_q[:] = 0.0
 
-        delta_q_full[:] = 0.0
-        delta_q_full[oink.v_indices] = delta_q
+            delta_q_full[:] = 0.0
+            delta_q_full[oink.v_indices] = delta_q
 
-        q_current = scene.integrate(q_current, delta_q_full)
-        scene.setJointPositions(q_current)
-
-        # Refresh FK for the frame task when using Cartesian tracking.
-        if action_space == "cartesian":
+            q_current = scene.integrate(q_current, delta_q_full)
+            scene.setJointPositions(q_current)
             scene.forwardKinematics(q_current, ee_frame_name)
+            trajectory.append(q_current.copy())
 
-        trajectory.append(q_current.copy())
+            if sleep:
+                viz.display(q_current)
+                elapsed = time.time() - loop_start
+                time.sleep(max(0.0, dt - elapsed))
 
+    else:
+        trajectory = [q.copy() for q in dense_targets]
         if sleep:
-            viz.display(q_current)
-            elapsed = time.time() - loop_start
-            time.sleep(max(0.0, dt - elapsed))
+            for q in trajectory:
+                viz.display(q)
+                time.sleep(dt)
 
     print("Finished tracking action chunk.")
-    print(f"Generated constrained trajectory with {len(trajectory)} configurations.")
+    print(f"Generated trajectory with {len(trajectory)} configurations.")
 
     executed_ee_positions = compute_end_effector_positions(
         scene,
@@ -442,7 +439,7 @@ def main(
 
     # Visualize 1. sparse policy waypoints,
     # 2. dense interpolated references,
-    # 3. final OInK-constrained executed trajectory.
+    # 3. final executed trajectory.
     visualizePositionTrace(
         viz,
         sparse_target_positions,
@@ -451,7 +448,7 @@ def main(
         trace_color=(255, 160, 0),
         waypoint_color=(255, 160, 0),
         line_width=1.0,
-        waypoint_radius=0.009,
+        waypoint_radius=0.006,
         draw_trace=False,
         draw_waypoints=True,
     )
@@ -473,8 +470,8 @@ def main(
     visualizePositionTrace(
         viz,
         executed_ee_positions,
-        trace_name="/action_chunk/executed_oink_trace/trace",
-        waypoint_root="/action_chunk/executed_oink_trace/markers",
+        trace_name="/action_chunk/executed_trace/trace",
+        waypoint_root="/action_chunk/executed_trace/markers",
         trace_color=(0, 80, 255),
         waypoint_color=(0, 80, 255),
         line_width=10.0,
@@ -483,10 +480,9 @@ def main(
         draw_waypoints=False,
     )
 
-    current_ee_marker = None
     current_ee_marker = viz.viewer.scene.add_icosphere(
         "/action_chunk/current_ee",
-        radius=0.025,
+        radius=0.020,
         position=executed_ee_positions[0],
         color=(255, 0, 0),
     )
@@ -494,16 +490,16 @@ def main(
     print("Visualization added:")
     print("  orange: sparse policy waypoints shown as small markers only")
     print("  gray:   dense interpolated targets")
-    print("  blue:   executed OInK-constrained trajectory")
+    if action_space == "cartesian":
+        print("  blue:   executed OInK-constrained trajectory")
+    else:
+        print("  blue:   executed joint-space trajectory")
     print("  red:    current end-effector position")
     print(
         "Use the Viser GUI buttons to animate, step through, or reset the trajectory."
     )
 
-    state = {
-        "step_idx": 0,
-        "animating": False,
-    }
+    state = PlaybackState()
 
     animate_button = viz.viewer.gui.add_button("Animate action chunk")
     step_button = viz.viewer.gui.add_button("Step once")
@@ -516,42 +512,42 @@ def main(
         viz.display(trajectory[step_idx])
         current_ee_marker.position = executed_ee_positions[step_idx]
 
-        state["step_idx"] = step_idx
+        state.step_idx = step_idx
 
     @animate_button.on_click
     def animate_action_chunk(_):
-        if state["animating"]:
+        if state.animating:
             return
 
-        state["animating"] = True
+        state.animating = True
         animate_button.disabled = True
         step_button.disabled = True
         reset_button.disabled = True
 
-        if state["step_idx"] >= len(trajectory) - 1:
-            state["step_idx"] = 0
+        if state.step_idx >= len(trajectory) - 1:
+            state.step_idx = 0
 
         try:
-            for idx in range(state["step_idx"], len(trajectory)):
+            for idx in range(state.step_idx, len(trajectory)):
                 display_step(idx)
                 time.sleep(animation_dt)
         finally:
-            state["animating"] = False
+            state.animating = False
             animate_button.disabled = False
             step_button.disabled = False
             reset_button.disabled = False
 
     @step_button.on_click
     def step_once(_):
-        if state["animating"]:
+        if state.animating:
             return
 
-        next_idx = min(state["step_idx"] + 1, len(trajectory) - 1)
+        next_idx = min(state.step_idx + 1, len(trajectory) - 1)
         display_step(next_idx)
 
     @reset_button.on_click
     def reset(_):
-        if state["animating"]:
+        if state.animating:
             return
 
         display_step(0)

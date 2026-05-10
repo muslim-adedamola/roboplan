@@ -299,8 +299,10 @@ def main(
 
         print(f"Velocity variables: {num_variables}")
 
-        joint_weights = np.full(num_variables, 0.05)
-        config_options = ConfigurationTaskOptions(task_gain=0.1, lm_damping=0.0)
+        # Keep a very small configuration regularization term so the Cartesian frame
+        # task dominates while still mildly biasing the solution toward the start
+        joint_weights = np.full(num_variables, 1e-4)
+        config_options = ConfigurationTaskOptions(task_gain=1e-4, lm_damping=0.0)
         config_task = ConfigurationTask(
             oink,
             q_start[oink.q_indices],
@@ -514,15 +516,14 @@ def main(
         if start_step_idx >= len(trajectory) - 1:
             start_step_idx = 0
 
-        try:
-            for idx in range(start_step_idx, len(trajectory)):
-                display_step(idx)
-                time.sleep(animation_dt)
-        finally:
-            animating = False
-            animate_button.disabled = False
-            step_slider.disabled = False
-            reset_button.disabled = False
+        for idx in range(start_step_idx, len(trajectory)):
+            display_step(idx)
+            time.sleep(animation_dt)
+
+        animating = False
+        animate_button.disabled = False
+        step_slider.disabled = False
+        reset_button.disabled = False
 
     @step_slider.on_update
     def update_step_from_slider(_):

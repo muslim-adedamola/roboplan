@@ -301,17 +301,7 @@ class CartesianTrajectory:
     def __init__(self) -> None: ...
 
     @overload
-    def __init__(
-        self,
-        base_frames: Sequence[str],
-        tip_frames: Sequence[str],
-        times: Sequence[float],
-        tforms: Sequence[
-            Sequence[
-                Annotated[NDArray[numpy.float64], dict(shape=(4, 4), order='F')]
-            ]
-        ],
-    ) -> None: ...
+    def __init__(self, base_frames: Sequence[str], tip_frames: Sequence[str], times: Sequence[float], tforms: Sequence[Sequence[Annotated[NDArray[numpy.float64], dict(shape=(4, 4), order='F')]]]) -> None: ...
 
     @property
     def base_frames(self) -> list[str]:
@@ -335,23 +325,11 @@ class CartesianTrajectory:
     def times(self, arg: Sequence[float], /) -> None: ...
 
     @property
-    def tforms(
-        self,
-    ) -> list[
-        list[Annotated[NDArray[numpy.float64], dict(shape=(4, 4), order='F')]]
-    ]:
+    def tforms(self) -> list[list[Annotated[NDArray[numpy.float64], dict(shape=(4, 4), order='F')]]]:
         """The list of Cartesian transforms."""
 
     @tforms.setter
-    def tforms(
-        self,
-        arg: Sequence[
-            Sequence[
-                Annotated[NDArray[numpy.float64], dict(shape=(4, 4), order='F')]
-            ]
-        ],
-        /,
-    ) -> None: ...
+    def tforms(self, arg: Sequence[Sequence[Annotated[NDArray[numpy.float64], dict(shape=(4, 4), order='F')]]], /,) -> None: ...
 
     def __repr__(self) -> str: ...
 

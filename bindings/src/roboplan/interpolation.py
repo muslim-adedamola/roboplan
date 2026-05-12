@@ -114,7 +114,7 @@ def interpolateJointTrajectory(
 def interpolateCartesianTrajectory(
     trajectory: CartesianTrajectory,
     control_dt: float,
-) -> list[np.ndarray]:
+) -> CartesianTrajectory:
     """Interpolate a CartesianTrajectory using its waypoint times.
 
     Args:
@@ -122,26 +122,30 @@ def interpolateCartesianTrajectory(
         control_dt: Desired interpolation sample period, in seconds.
 
     Returns:
-        Dense Cartesian transforms sampled according to the trajectory times.
+        Dense Cartesian trajectory sampled according to the sparse waypoint times.
     """
     if control_dt <= 0.0:
         raise ValueError("control_dt must be positive.")
 
-    if len(trajectory.tforms) != len(trajectory.times):
-        raise ValueError(
-            "CartesianTrajectory tforms and times must have the same length."
-        )
+    if len(trajectory.times) < 2:
+        return trajectory
 
-    if len(trajectory.tforms) < 2:
-        return [np.asarray(tform).copy() for tform in trajectory.tforms]
+    if len(trajectory.base_frames) != len(trajectory.tip_frames):
+        raise ValueError("base_frames and tip_frames must have the same length.")
 
-    transforms_se3 = [pin.SE3(np.asarray(tform)) for tform in trajectory.tforms]
+    if len(trajectory.tforms) != len(trajectory.tip_frames):
+        raise ValueError("tforms must have one transform sequence per tip frame.")
 
-    dense_tforms = []
-    for idx in range(len(transforms_se3) - 1):
-        start = transforms_se3[idx]
-        end = transforms_se3[idx + 1]
+    for tforms_for_frame in trajectory.tforms:
+        if len(tforms_for_frame) != len(trajectory.times):
+            raise ValueError(
+                "Each transform sequence must have the same length as times."
+            )
 
+    dense_times = []
+    dense_tforms_by_frame = [[] for _ in trajectory.tip_frames]
+
+    for idx in range(len(trajectory.times) - 1):
         segment_time = trajectory.times[idx + 1] - trajectory.times[idx]
         if segment_time <= 0.0:
             raise ValueError("CartesianTrajectory times must be strictly increasing.")
@@ -153,9 +157,21 @@ def interpolateCartesianTrajectory(
                 continue
 
             alpha = step / steps_per_segment
-            dense_tforms.append(pin.SE3.Interpolate(start, end, alpha).homogeneous)
+            dense_times.append(trajectory.times[idx] + alpha * segment_time)
 
-    return dense_tforms
+            for frame_idx, tforms_for_frame in enumerate(trajectory.tforms):
+                start = pin.SE3(np.asarray(tforms_for_frame[idx]))
+                end = pin.SE3(np.asarray(tforms_for_frame[idx + 1]))
+                dense_tforms_by_frame[frame_idx].append(
+                    pin.SE3.Interpolate(start, end, alpha).homogeneous
+                )
+
+    return CartesianTrajectory(
+        base_frames=trajectory.base_frames,
+        tip_frames=trajectory.tip_frames,
+        times=dense_times,
+        tforms=dense_tforms_by_frame,
+    )
 
 
 def interpolateSE3Waypoints(
@@ -167,7 +183,12 @@ def interpolateSE3Waypoints(
 
     Prefer interpolateCartesianTrajectory() for timestamped Cartesian trajectories.
     """
-    trajectory = CartesianTrajectory()
-    trajectory.times = waypoint_times
-    trajectory.tforms = transforms
-    return interpolateCartesianTrajectory(trajectory, control_dt)
+    trajectory = CartesianTrajectory(
+        base_frames=[""],
+        tip_frames=[""],
+        times=waypoint_times,
+        tforms=[transforms],
+    )
+
+    dense_trajectory = interpolateCartesianTrajectory(trajectory, control_dt)
+    return dense_trajectory.tforms[0]

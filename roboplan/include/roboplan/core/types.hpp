@@ -172,19 +172,32 @@ struct JointTrajectory {
 
 /// @brief Contains a trajectory of Cartesian configurations.
 struct CartesianTrajectory {
-  /// @brief The name of the base (or reference) frame.
-  std::string base_frame;
+  /// @brief Default constructor.
+  CartesianTrajectory() = default;
 
-  /// @brief The name of the tip (or target) frame.
-  std::string tip_frame;
+  /// @brief Constructor.
+  CartesianTrajectory(std::vector<std::string> base_frames, std::vector<std::string> tip_frames,
+                      std::vector<double> times, std::vector<std::vector<Eigen::Matrix4d>> tforms)
+      : base_frames(std::move(base_frames)), tip_frames(std::move(tip_frames)),
+        times(std::move(times)), tforms(std::move(tforms)) {}
+
+  /// @brief The names of the base (or reference) frames.
+  std::vector<std::string> base_frames;
+
+  /// @brief The names of the tip (or target) frames.
+  std::vector<std::string> tip_frames;
 
   /// @brief The list of times.
   std::vector<double> times;
 
-  /// @brief The list of Cartesian transforms from the base to the tip frame.
-  /// NOTE: I'd like this to be a std::vector<Eigen::Isometry3d> but nanobind
-  /// doesn't have off the shelf bindings for this.
-  std::vector<Eigen::Matrix4d> tforms;
+  /// @brief The list of Cartesian transforms from each base frame to each tip frame.
+  ///
+  /// The outer vector indexes the end-effector frame and the inner vector indexes
+  /// time, so tforms[frame_idx][time_idx] is the transform for
+  /// tip_frames[frame_idx] at times[time_idx].
+  /// NOTE: I'd like this to be a std::vector<std::vector<Eigen::Isometry3d>>
+  /// but nanobind doesn't have off the shelf bindings for this.
+  std::vector<std::vector<Eigen::Matrix4d>> tforms;
 
   /// @brief Prints basic information about the trajectory.
   friend std::ostream& operator<<(std::ostream& os, const CartesianTrajectory& traj);

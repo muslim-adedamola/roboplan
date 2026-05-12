@@ -57,119 +57,79 @@ from roboplan.visualization import visualizePositionTrace
 ActionSpace = Literal["cartesian", "joint"]
 
 
-def make_mock_cartesian_target_poses(
-    scene: Scene,
-    q_start: np.ndarray,
-    ee_frame_name: str,
-    horizon: int,
-    translation_scale: float = 0.04,
-    action_scale: float = 1.0,
-) -> list[np.ndarray]:
-    """Create sparse absolute Cartesian target poses as 4x4 transforms.
-
-    Args:
-        scene: RoboPlan scene used to compute the starting end-effector pose.
-        q_start: Full starting robot configuration.
-        ee_frame_name: End-effector frame name.
-        horizon: Number of sparse target poses after the starting pose.
-        translation_scale: Per-step translation scale in meters.
-        action_scale: Scale applied to the mock Cartesian target path.
-
-    Returns:
-        Sparse absolute Cartesian target poses as 4x4 homogeneous matrices.
-    """
-    start_pose = scene.forwardKinematics(q_start, ee_frame_name)
-    start_rotation = start_pose[:3, :3]
-    start_translation = start_pose[:3, 3]
-
-    targets = [start_pose.copy()]
-
-    for i in range(horizon):
-        phase = (i + 1) / float(horizon)
-
-        local_translation_offset = action_scale * np.array(
-            [
-                translation_scale * (i + 1),
-                0.012 * np.sin(np.pi * phase),
-                -0.010 * np.sin(0.5 * np.pi * phase),
-            ],
-            dtype=float,
-        )
-
-        # Keep the orientation fixed in the default mock target path; the targets are
-        # still full 4x4 transforms, so orientation can be varied by changing these matrices.
-        target = np.eye(4)
-        target[:3, :3] = start_rotation
-        target[:3, 3] = start_translation + start_rotation @ local_translation_offset
-
-        targets.append(target)
-
-    return targets
-
-
-def make_mock_cartesian_trajectories_by_frame(
+def make_mock_cartesian_trajectory(
     scene: Scene,
     q_start: np.ndarray,
     ee_frame_names: list[str],
     base_frame: str,
     horizon: int,
     segment_time: float,
-    control_dt: float,
+    translation_scale: float = 0.04,
     action_scale: float = 1.0,
-) -> tuple[dict[str, list[np.ndarray]], dict[str, list[np.ndarray]]]:
-    """Create sparse and dense Cartesian target trajectories for each EE frame.
+) -> CartesianTrajectory:
+    """Create a sparse Cartesian target trajectory for all EE frames.
 
     Args:
         scene: RoboPlan scene used to compute starting end-effector poses.
         q_start: Full starting robot configuration.
         ee_frame_names: End-effector frame names to create trajectories for.
-        base_frame: Reference frame for the Cartesian trajectories.
+        base_frame: Reference frame for the Cartesian trajectory.
         horizon: Number of sparse target poses after the starting pose.
         segment_time: Duration between consecutive sparse Cartesian waypoints, in seconds.
-        control_dt: Desired dense interpolation sample period, in seconds.
+        translation_scale: Per-step translation scale in meters.
         action_scale: Scale applied to the mock Cartesian target paths.
 
     Returns:
-        A pair of dictionaries keyed by end-effector frame name:
-            1. Sparse Cartesian target transforms.
-            2. Dense interpolated Cartesian target transforms.
+        Sparse Cartesian trajectory containing one transform sequence per EE frame.
     """
-    sparse_targets_by_frame = {}
-    dense_targets_by_frame = {}
+    tforms_by_frame = []
 
     for ee_idx, ee_frame_name in enumerate(ee_frame_names):
-        sparse_targets = make_mock_cartesian_target_poses(
-            scene,
-            q_start,
-            ee_frame_name,
-            horizon,
-            action_scale=action_scale,
+        start_pose = scene.forwardKinematics(q_start, ee_frame_name)
+        start_rotation = start_pose[:3, :3]
+        start_translation = start_pose[:3, 3]
+
+        lateral_offset = (
+            0.03 * (ee_idx - 0.5 * (len(ee_frame_names) - 1))
+            if len(ee_frame_names) > 1
+            else 0.0
         )
 
-        if len(ee_frame_names) > 1:
-            lateral_offset = 0.03 * (ee_idx - 0.5 * (len(ee_frame_names) - 1))
-            for target_idx, target in enumerate(sparse_targets[1:], start=1):
-                phase = target_idx / float(horizon)
-                target[:3, 3] += target[:3, :3] @ np.array(
+        targets = [start_pose.copy()]
+
+        for i in range(horizon):
+            phase = (i + 1) / float(horizon)
+
+            local_translation_offset = action_scale * np.array(
+                [
+                    translation_scale * (i + 1),
+                    0.012 * np.sin(np.pi * phase),
+                    -0.010 * np.sin(0.5 * np.pi * phase),
+                ],
+                dtype=float,
+            )
+
+            if lateral_offset:
+                local_translation_offset += np.array(
                     [0.0, lateral_offset * phase, 0.0],
                     dtype=float,
                 )
 
-        sparse_trajectory = CartesianTrajectory()
-        sparse_trajectory.base_frame = base_frame
-        sparse_trajectory.tip_frame = ee_frame_name
-        sparse_trajectory.times = [
-            idx * segment_time for idx in range(len(sparse_targets))
-        ]
-        sparse_trajectory.tforms = sparse_targets
+            target = np.eye(4)
+            target[:3, :3] = start_rotation
+            target[:3, 3] = (
+                start_translation + start_rotation @ local_translation_offset
+            )
+            targets.append(target)
 
-        sparse_targets_by_frame[ee_frame_name] = sparse_targets
-        dense_targets_by_frame[ee_frame_name] = interpolateCartesianTrajectory(
-            sparse_trajectory,
-            control_dt,
-        )
+        tforms_by_frame.append(targets)
 
-    return sparse_targets_by_frame, dense_targets_by_frame
+    return CartesianTrajectory(
+        base_frames=[base_frame] * len(ee_frame_names),
+        tip_frames=ee_frame_names,
+        times=[idx * segment_time for idx in range(horizon + 1)],
+        tforms=tforms_by_frame,
+    )
 
 
 def make_mock_joint_targets(
@@ -207,24 +167,47 @@ def make_mock_joint_targets(
     return targets
 
 
-def compute_end_effector_positions_by_frame(
-    scene: Scene,
-    configurations: list[np.ndarray],
-    ee_frame_names: list[str],
+def compute_end_effector_positions(
+    trajectory: CartesianTrajectory | None = None,
+    scene: Scene | None = None,
+    configurations: list[np.ndarray] | None = None,
+    ee_frame_names: list[str] | None = None,
 ) -> dict[str, np.ndarray]:
-    """Compute xyz positions for multiple end-effector frames.
+    """Compute end-effector xyz positions from Cartesian targets or configurations.
 
     Args:
-        scene: RoboPlan scene used to perform forward kinematics.
-        configurations: List of joint configurations to evaluate.
-        ee_frame_names: End-effector frame names.
+        trajectory: Cartesian trajectory to extract positions from.
+        scene: RoboPlan scene used for forward kinematics with joint configurations.
+        configurations: Joint configurations to evaluate.
+        ee_frame_names: End-effector frame names for forward kinematics.
 
     Returns:
         Dictionary mapping end-effector frame names to position arrays.
+
+    Raises:
+        ValueError: If both input modes are provided, or if neither complete input
+            mode is provided.
     """
+    has_trajectory = trajectory is not None
+    has_fk_inputs = (
+        scene is not None and configurations is not None and ee_frame_names is not None
+    )
+
+    if has_trajectory == has_fk_inputs:
+        raise ValueError(
+            "Provide either trajectory or scene/configurations/ee_frame_names, "
+            "but not both."
+        )
+
+    if has_trajectory:
+        return {
+            tip_frame: np.array([tform[:3, 3].copy() for tform in tforms])
+            for tip_frame, tforms in zip(trajectory.tip_frames, trajectory.tforms)
+        }
+
     return {
         name: np.array(
-            [scene.forwardKinematics(q, name)[:3, 3] for q in configurations]
+            [scene.forwardKinematics(q, name)[:3, 3].copy() for q in configurations]
         )
         for name in ee_frame_names
     }
@@ -417,7 +400,6 @@ def main(
 
     ee_frame_names = model_data.ee_names
     print(f"End-effectors: {ee_frame_names}")
-    first_ee_frame_name = ee_frame_names[0]
 
     if action_space == "cartesian":
         oink = Oink(scene, joint_group)
@@ -456,27 +438,26 @@ def main(
             goal.tip_frame = ee_frame_name
             frame_tasks.append(FrameTask(oink, scene, goal, task_options))
 
-        sparse_targets_by_frame, dense_targets_by_frame = (
-            make_mock_cartesian_trajectories_by_frame(
-                scene,
-                q_start,
-                ee_frame_names,
-                model_data.base_link,
-                chunk_horizon,
-                segment_time,
-                dt,
-                action_scale=action_scale,
-            )
+        sparse_cartesian_trajectory = make_mock_cartesian_trajectory(
+            scene,
+            q_start,
+            ee_frame_names,
+            model_data.base_link,
+            chunk_horizon,
+            segment_time,
+            action_scale=action_scale,
+        )
+        dense_cartesian_trajectory = interpolateCartesianTrajectory(
+            sparse_cartesian_trajectory,
+            dt,
         )
 
-        sparse_target_positions_by_frame = {
-            ee: np.array([t[:3, 3] for t in targets])
-            for ee, targets in sparse_targets_by_frame.items()
-        }
-        dense_target_positions_by_frame = {
-            ee: np.array([t[:3, 3] for t in targets])
-            for ee, targets in dense_targets_by_frame.items()
-        }
+        sparse_target_positions_by_frame = compute_end_effector_positions(
+            trajectory=sparse_cartesian_trajectory
+        )
+        dense_target_positions_by_frame = compute_end_effector_positions(
+            trajectory=dense_cartesian_trajectory
+        )
 
         tasks = [*frame_tasks, config_task]
 
@@ -501,19 +482,15 @@ def main(
 
         dense_targets = interpolateJointTrajectory(scene, sparse_trajectory, dt)
 
-        sparse_target_positions_by_frame = compute_end_effector_positions_by_frame(
-            scene, sparse_targets, ee_frame_names
+        sparse_target_positions_by_frame = compute_end_effector_positions(
+            scene=scene, configurations=sparse_targets, ee_frame_names=ee_frame_names
         )
-        dense_target_positions_by_frame = compute_end_effector_positions_by_frame(
-            scene, dense_targets, ee_frame_names
+        dense_target_positions_by_frame = compute_end_effector_positions(
+            scene=scene, configurations=dense_targets, ee_frame_names=ee_frame_names
         )
 
-    print(
-        f"Sparse targets: {len(sparse_target_positions_by_frame[first_ee_frame_name])}"
-    )
-    print(
-        f"Dense targets:  {len(dense_target_positions_by_frame[first_ee_frame_name])}"
-    )
+    print(f"Sparse targets: {len(sparse_target_positions_by_frame[ee_frame_names[0]])}")
+    print(f"Dense targets:  {len(dense_target_positions_by_frame[ee_frame_names[0]])}")
 
     # Trajectory rollout starts from the fixed start configuration
     scene.setJointPositions(q_start)
@@ -525,13 +502,13 @@ def main(
         # Non-group indices are always zero; only group indices are written each step.
         delta_q_full = np.zeros(model_pin.nv, dtype=float)
 
-        for idx in range(len(dense_targets_by_frame[first_ee_frame_name])):
+        for idx in range(len(dense_cartesian_trajectory.times)):
             loop_start = time.time()
 
-            for frame_task, ee_frame_name in zip(frame_tasks, ee_frame_names):
-                frame_task.setTargetFrameTransform(
-                    dense_targets_by_frame[ee_frame_name][idx]
-                )
+            for frame_task, frame_tforms in zip(
+                frame_tasks, dense_cartesian_trajectory.tforms
+            ):
+                frame_task.setTargetFrameTransform(frame_tforms[idx])
 
             try:
                 oink.solveIk(scene, tasks, constraints, delta_q, regularization)
@@ -559,10 +536,10 @@ def main(
     print("Finished tracking action chunk.")
     print(f"Generated trajectory with {len(trajectory)} configurations.")
 
-    executed_ee_positions_by_frame = compute_end_effector_positions_by_frame(
-        scene,
-        trajectory,
-        ee_frame_names,
+    executed_ee_positions_by_frame = compute_end_effector_positions(
+        scene=scene,
+        configurations=trajectory,
+        ee_frame_names=ee_frame_names,
     )
 
     trace_colors = [

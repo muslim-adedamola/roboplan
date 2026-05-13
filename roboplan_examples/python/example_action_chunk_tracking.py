@@ -167,44 +167,38 @@ def make_mock_joint_targets(
     return targets
 
 
-def compute_end_effector_positions(
-    trajectory: CartesianTrajectory | None = None,
-    scene: Scene | None = None,
-    configurations: list[np.ndarray] | None = None,
-    ee_frame_names: list[str] | None = None,
+def compute_cartesian_trajectory_positions(
+    trajectory: CartesianTrajectory,
 ) -> dict[str, np.ndarray]:
-    """Compute end-effector xyz positions from Cartesian targets or configurations.
+    """Extract xyz positions from a Cartesian trajectory.
 
     Args:
         trajectory: Cartesian trajectory to extract positions from.
-        scene: RoboPlan scene used for forward kinematics with joint configurations.
+
+    Returns:
+        Dictionary mapping tip frame names to position arrays.
+    """
+    return {
+        tip_frame: np.array([tform[:3, 3].copy() for tform in tforms])
+        for tip_frame, tforms in zip(trajectory.tip_frames, trajectory.tforms)
+    }
+
+
+def compute_end_effector_positions(
+    scene: Scene,
+    configurations: list[np.ndarray],
+    ee_frame_names: list[str],
+) -> dict[str, np.ndarray]:
+    """Compute end-effector xyz positions for multiple frames.
+
+    Args:
+        scene: RoboPlan scene used for forward kinematics.
         configurations: Joint configurations to evaluate.
-        ee_frame_names: End-effector frame names for forward kinematics.
+        ee_frame_names: End-effector frame names.
 
     Returns:
         Dictionary mapping end-effector frame names to position arrays.
-
-    Raises:
-        ValueError: If both input modes are provided, or if neither complete input
-            mode is provided.
     """
-    has_trajectory = trajectory is not None
-    has_fk_inputs = (
-        scene is not None and configurations is not None and ee_frame_names is not None
-    )
-
-    if has_trajectory == has_fk_inputs:
-        raise ValueError(
-            "Provide either trajectory or scene/configurations/ee_frame_names, "
-            "but not both."
-        )
-
-    if has_trajectory:
-        return {
-            tip_frame: np.array([tform[:3, 3].copy() for tform in tforms])
-            for tip_frame, tforms in zip(trajectory.tip_frames, trajectory.tforms)
-        }
-
     return {
         name: np.array(
             [scene.forwardKinematics(q, name)[:3, 3].copy() for q in configurations]
@@ -454,11 +448,11 @@ def main(
             dt,
         )
 
-        sparse_target_positions_by_frame = compute_end_effector_positions(
-            trajectory=sparse_cartesian_trajectory
+        sparse_target_positions_by_frame = compute_cartesian_trajectory_positions(
+            sparse_cartesian_trajectory
         )
-        dense_target_positions_by_frame = compute_end_effector_positions(
-            trajectory=dense_cartesian_trajectory
+        dense_target_positions_by_frame = compute_cartesian_trajectory_positions(
+            dense_cartesian_trajectory
         )
 
         tasks = [*frame_tasks, config_task]
@@ -485,10 +479,10 @@ def main(
         dense_targets = interpolateJointTrajectory(scene, sparse_trajectory, dt)
 
         sparse_target_positions_by_frame = compute_end_effector_positions(
-            scene=scene, configurations=sparse_targets, ee_frame_names=ee_frame_names
+            scene, sparse_targets, ee_frame_names
         )
         dense_target_positions_by_frame = compute_end_effector_positions(
-            scene=scene, configurations=dense_targets, ee_frame_names=ee_frame_names
+            scene, dense_targets, ee_frame_names
         )
 
     print(f"Sparse targets: {len(sparse_target_positions_by_frame[ee_frame_names[0]])}")
@@ -539,9 +533,9 @@ def main(
     print(f"Generated trajectory with {len(trajectory)} configurations.")
 
     executed_ee_positions_by_frame = compute_end_effector_positions(
-        scene=scene,
-        configurations=trajectory,
-        ee_frame_names=ee_frame_names,
+        scene,
+        trajectory,
+        ee_frame_names,
     )
 
     trace_colors = [

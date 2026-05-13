@@ -170,23 +170,16 @@ struct JointTrajectory {
   friend std::ostream& operator<<(std::ostream& os, const JointTrajectory& traj);
 };
 
-
 /// @brief Contains a path of Cartesian configurations.
-struct CartesianPath
-{
+struct CartesianPath {
   /// @brief Default constructor.
   CartesianPath() = default;
 
   /// @brief Constructor.
-  CartesianPath(
-    const std::vector<std::string>& base_frames,
-    const std::vector<std::string>& tip_frames,
-    const std::vector<std::vector<Eigen::Matrix4d>>& tforms)
-    : base_frames(base_frames)
-    , tip_frames(tip_frames)
-    , tforms(tforms)
-  {
-  }
+  CartesianPath(const std::vector<std::string>& base_frames,
+                const std::vector<std::string>& tip_frames,
+                const std::vector<std::vector<Eigen::Matrix4d>>& tforms)
+      : base_frames(base_frames), tip_frames(tip_frames), tforms(tforms) {}
 
   /// @brief The names of the base (or reference) frames.
   std::vector<std::string> base_frames;
@@ -207,22 +200,16 @@ struct CartesianPath
   friend std::ostream& operator<<(std::ostream& os, const CartesianPath& path);
 };
 
-
 /// @brief Contains a trajectory of Cartesian configurations.
 struct CartesianTrajectory {
   /// @brief Default constructor.
   CartesianTrajectory() = default;
 
-/// @brief Constructor.
-CartesianTrajectory(
-    const std::vector<std::string>& base_frames,
-    const std::vector<std::string>& tip_frames,
-    const std::vector<double>& times,
-    const std::vector<std::vector<Eigen::Matrix4d>>& tforms)
-    : base_frames(base_frames),
-      tip_frames(tip_frames),
-      times(times),
-      tforms(tforms) {}
+  /// @brief Constructor.
+  CartesianTrajectory(const std::vector<std::string>& base_frames,
+                      const std::vector<std::string>& tip_frames, const std::vector<double>& times,
+                      const std::vector<std::vector<Eigen::Matrix4d>>& tforms)
+      : base_frames(base_frames), tip_frames(tip_frames), times(times), tforms(tforms) {}
 
   /// @brief The names of the base (or reference) frames.
   std::vector<std::string> base_frames;

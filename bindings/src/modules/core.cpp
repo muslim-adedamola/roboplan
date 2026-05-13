@@ -126,6 +126,28 @@ void init_core_types(nanobind::module_& m) {
         return ss.str();
       });
 
+nanobind::class_<CartesianPath>(
+  m,
+  "CartesianPath",
+  "Contains a path of Cartesian configurations.")
+  .def(nanobind::init<>())  // Default constructor
+  .def(
+    nanobind::init<
+      const std::vector<std::string>&,
+      const std::vector<std::string>&,
+      const std::vector<std::vector<Eigen::Matrix4d>>&>(),
+    nanobind::arg("base_frames"),
+    nanobind::arg("tip_frames"),
+    nanobind::arg("tforms"))
+  .def_rw("base_frames", &CartesianPath::base_frames, "The names of the base frames.")
+  .def_rw("tip_frames", &CartesianPath::tip_frames, "The names of the tip frames.")
+  .def_rw("tforms", &CartesianPath::tforms, "The list of Cartesian transforms.")
+  .def("__repr__", [](const CartesianPath& path) {
+    std::stringstream ss;
+    ss << path;
+    return ss.str();
+  });
+      
   nanobind::class_<CartesianTrajectory>(m, "CartesianTrajectory",
                                         "Contains a trajectory of Cartesian configurations.")
       .def(nanobind::init<>())  // Default constructor

@@ -72,7 +72,7 @@ def make_mock_cartesian_trajectory(
     Args:
         scene: RoboPlan scene used to compute starting end-effector poses.
         q_start: Full starting robot configuration.
-        ee_frame_names: End-effector frame names to create trajectories for.
+        ee_frame_names: End-effector frame names for the trajectory.
         base_frame: Reference frame for the Cartesian trajectory.
         horizon: Number of sparse target poses after the starting pose.
         segment_time: Duration between consecutive sparse Cartesian waypoints, in seconds.
@@ -399,6 +399,8 @@ def main(
     )
 
     ee_frame_names = model_data.ee_names
+    if not ee_frame_names:
+        raise ValueError(f"Model '{model}' has no configured end-effectors.")
     print(f"End-effectors: {ee_frame_names}")
 
     if action_space == "cartesian":

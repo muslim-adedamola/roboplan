@@ -380,7 +380,6 @@ class Cylinder:
 
     def __init__(self, radius: float, length: float) -> None: ...
 
-
 class Mesh:
     """Temporary wrapper struct to represent a triangle mesh geometry."""
 
@@ -484,7 +483,7 @@ class Scene:
 
     def addSphereGeometry(self, name: str, parent_frame: str, sphere: Sphere, tform: Annotated[NDArray[numpy.float64], dict(shape=(4, 4), order='F')], color: Annotated[NDArray[numpy.float64], dict(shape=(4), order='C')]) -> None:
         """Adds a sphere geometry to the scene."""
-    
+
     def addCylinderGeometry(self, name: str, parent_frame: str, cylinder: Cylinder, tform: Annotated[NDArray[numpy.float64], dict(shape=(4, 4), order='F')], color: Annotated[NDArray[numpy.float64], dict(shape=(4), order='C')]) -> None:
         """Adds a cylinder geometry to the scene."""
 

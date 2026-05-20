@@ -248,6 +248,7 @@ compiler-rt = ">=19.1.7,<20"
 # Python test dependencies
 pytest = ">=6"
 pytest-benchmark = ">=5.1.0,<6"
+pynput = ">=1.8.2,<2"
 
 [pypi-dependencies]
 pycollada = ">=0.9.2, <0.10"

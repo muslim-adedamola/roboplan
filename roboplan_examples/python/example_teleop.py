@@ -44,11 +44,8 @@ import xacro
 from pinocchio.visualize import ViserVisualizer
 from pynput import keyboard
 
-from common import (
-    get_home_configuration,
-    get_model_data,
-    se3_to_viser_wxyz,
-)
+from common import get_home_configuration, get_model_data
+from roboplan.visualization import se3_to_viser_wxyz
 from roboplan.core import CartesianConfiguration, Scene
 from roboplan.example_models import get_package_share_dir
 from roboplan.filters import SE3LowPassFilter

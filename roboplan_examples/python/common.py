@@ -478,21 +478,6 @@ def get_octree():
     )
 
 
-def se3_to_viser_wxyz(transform: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Extract Viser-compatible position and wxyz quaternion from an SE(3) matrix.
-
-    Args:
-        transform: 4x4 homogeneous transform.
-
-    Returns:
-        Tuple of ``(position, wxyz)`` as numpy arrays.
-    """
-    position = transform[:3, 3].copy()
-    quat = pin.Quaternion(transform[:3, :3])
-    wxyz = np.array([quat.w, quat.x, quat.y, quat.z])
-    return position, wxyz
-
-
 def get_home_configuration(
     scene: Scene,
     model_data: RobotModelConfig,

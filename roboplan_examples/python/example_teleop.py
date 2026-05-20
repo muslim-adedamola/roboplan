@@ -31,6 +31,7 @@ Example commands:
 """
 
 import sys
+import termios
 import threading
 import time
 from dataclasses import dataclass, field
@@ -40,13 +41,18 @@ import numpy as np
 import pinocchio as pin
 import tyro
 import xacro
-import termios
 from pinocchio.visualize import ViserVisualizer
 from pynput import keyboard
 
-from common import RobotModelConfig, get_model_data
+from common import (
+    RobotModelConfig,
+    get_home_configuration,
+    get_model_data,
+    se3_to_viser_wxyz,
+)
 from roboplan.core import CartesianConfiguration, Scene
 from roboplan.example_models import get_package_share_dir
+from roboplan.filters import SE3LowPassFilter
 from roboplan.optimal_ik import (
     ConfigurationTask,
     ConfigurationTaskOptions,
@@ -224,55 +230,18 @@ def apply_cartesian_delta(
     return new_target
 
 
-def se3_to_viser_wxyz(transform: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Extract Viser-compatible position and wxyz quaternion from an SE(3) matrix.
-
-    Args:
-        transform: 4x4 homogeneous transform.
-
-    Returns:
-        Tuple of ``(position, wxyz)`` as numpy arrays.
-    """
-    position = transform[:3, 3].copy()
-    quat = pin.Quaternion(transform[:3, :3])
-    wxyz = np.array([quat.w, quat.x, quat.y, quat.z])
-    return position, wxyz
-
-
-def get_home_configuration(
-    scene: Scene,
-    model_data: RobotModelConfig,
-) -> np.ndarray:
-    """Return the home configuration for the selected model.
-
-    Args:
-        scene: Scene used to read current joint positions.
-        model_data: Robot model configuration.
-
-    Returns:
-        Full starting joint configuration vector.
-    """
-    q_full = scene.getCurrentJointPositions()
-    q_home = np.array(model_data.starting_joint_config)
-
-    if len(q_home) == len(q_full):
-        return q_home.copy()
-
-    print(
-        f"Warning: starting_joint_config size ({len(q_home)}) does not match "
-        f"model configuration size ({len(q_full)}). Using scene default instead."
-    )
-    return q_full.copy()
-
-
 def reset_targets_to_current_ee_poses(
     scene: Scene,
     q_current: np.ndarray,
     ee_frame_names: list[str],
     target_poses: dict[str, np.ndarray],
     target_frame_handles: dict[str, Any],
+    target_filters: dict[str, SE3LowPassFilter] | None = None,
 ) -> None:
     """Reset all target poses and their Viser markers to the current EE poses.
+
+    If ``target_filters`` is provided, each filter is also reset to the new
+    target pose so there is no lag or snap on resumption.
 
     Args:
         scene: Scene used for forward kinematics.
@@ -282,6 +251,8 @@ def reset_targets_to_current_ee_poses(
             Updated in place.
         target_frame_handles: Dict of EE frame name to Viser frame handle.
             Updated in place.
+        target_filters: Optional dict of EE frame name to SE3LowPassFilter.
+            When provided, each filter is reset to the new target pose.
     """
     for ee_frame_name in ee_frame_names:
         target_poses[ee_frame_name] = scene.forwardKinematics(
@@ -291,6 +262,8 @@ def reset_targets_to_current_ee_poses(
         position, wxyz = se3_to_viser_wxyz(target_poses[ee_frame_name])
         target_frame_handles[ee_frame_name].position = position
         target_frame_handles[ee_frame_name].wxyz = wxyz
+        if target_filters:
+            target_filters[ee_frame_name].reset(target_poses[ee_frame_name])
 
 
 def main(
@@ -300,6 +273,7 @@ def main(
     control_freq: float = 50.0,
     linear_sensitivity: float = 0.3,
     angular_sensitivity: float = 0.5,
+    reference_filter_tau: float = 0.1,
     task_gain: float = 1.0,
     lm_damping: float = 0.01,
     regularization: float = 1e-6,
@@ -322,6 +296,9 @@ def main(
         control_freq: Control loop frequency, in Hz.
         linear_sensitivity: End-effector linear speed in m/s at full key deflection.
         angular_sensitivity: End-effector angular speed in rad/s at full key deflection.
+        reference_filter_tau: Initial time constant for SE(3) target low-pass
+            filtering, in seconds. Adjustable at runtime via the Viser GUI.
+            Set to 0 to disable filtering.
         task_gain: OInK FrameTask gain.
         lm_damping: OInK FrameTask Levenberg-Marquardt damping.
         regularization: Tikhonov regularization for OInK.
@@ -460,6 +437,15 @@ def main(
         step=0.01,
         initial_value=angular_sensitivity,
     )
+    # tau=0 means pass-through (no filtering); the slider min is set to 0
+    # so the user can disable filtering at runtime without restarting.
+    filter_tau_slider = viz.viewer.gui.add_slider(
+        "Reference filter tau (s)",
+        min=0.0,
+        max=1.0,
+        step=0.01,
+        initial_value=reference_filter_tau,
+    )
     control_frame_dropdown = viz.viewer.gui.add_dropdown(
         "Control frame",
         options=["world", "ee"],
@@ -496,6 +482,16 @@ def main(
         ee_frame_name: scene.forwardKinematics(q_home, ee_frame_name).copy()
         for ee_frame_name in ee_frame_names
     }
+
+    # Filters are always created so tau can be adjusted at runtime via the
+    # slider without restarting. When tau=0 the filter output equals the
+    # input (pass-through), which is checked in the control loop.
+    target_filters: dict[str, SE3LowPassFilter] = {}
+    for ee_frame_name, target_pose in target_poses.items():
+        target_filter = SE3LowPassFilter(tau=reference_filter_tau)
+        target_filter.reset(target_pose)
+        target_filters[ee_frame_name] = target_filter
+
     target_frame_handles: dict[str, Any] = {}
     for ee_frame_name, target_pose in target_poses.items():
         position, wxyz = se3_to_viser_wxyz(target_pose)
@@ -529,7 +525,12 @@ def main(
                 q_current = q_home.copy()
                 scene.setJointPositions(q_current)
                 reset_targets_to_current_ee_poses(
-                    scene, q_current, ee_frame_names, target_poses, target_frame_handles
+                    scene,
+                    q_current,
+                    ee_frame_names,
+                    target_poses,
+                    target_frame_handles,
+                    target_filters,
                 )
                 viz.display(q_current)
                 continue
@@ -537,7 +538,12 @@ def main(
             if gui_reset_target.is_set():
                 gui_reset_target.clear()
                 reset_targets_to_current_ee_poses(
-                    scene, q_current, ee_frame_names, target_poses, target_frame_handles
+                    scene,
+                    q_current,
+                    ee_frame_names,
+                    target_poses,
+                    target_frame_handles,
+                    target_filters,
                 )
                 continue
 
@@ -558,14 +564,24 @@ def main(
                 q_current = q_home.copy()
                 scene.setJointPositions(q_current)
                 reset_targets_to_current_ee_poses(
-                    scene, q_current, ee_frame_names, target_poses, target_frame_handles
+                    scene,
+                    q_current,
+                    ee_frame_names,
+                    target_poses,
+                    target_frame_handles,
+                    target_filters,
                 )
                 viz.display(q_current)
                 continue
 
             if do_reset_target:
                 reset_targets_to_current_ee_poses(
-                    scene, q_current, ee_frame_names, target_poses, target_frame_handles
+                    scene,
+                    q_current,
+                    ee_frame_names,
+                    target_poses,
+                    target_frame_handles,
+                    target_filters,
                 )
                 continue
 
@@ -576,6 +592,7 @@ def main(
             # --- Read current GUI values ---
             lin_sens = float(linear_slider.value)
             ang_sens = float(angular_slider.value)
+            filter_tau = float(filter_tau_slider.value)
             ctrl_frame = str(control_frame_dropdown.value)
 
             # Determine which EEs the keyboard commands apply to this step.
@@ -603,7 +620,22 @@ def main(
             # EE is being commanded, all tasks must receive their current target
             # so OInK does not try to move uncontrolled EEs back to stale poses.
             for frame_task, ee_frame_name in zip(frame_tasks, ee_frame_names):
-                frame_task.setTargetFrameTransform(target_poses[ee_frame_name])
+                if filter_tau > 0.0:
+                    # Recreate the filter if tau changed via the slider, preserving
+                    # the current pose so there is no discontinuity.
+                    if target_filters[ee_frame_name].tau != filter_tau:
+                        current_pose = target_filters[ee_frame_name].update(
+                            target_poses[ee_frame_name], dt
+                        )
+                        target_filters[ee_frame_name] = SE3LowPassFilter(tau=filter_tau)
+                        target_filters[ee_frame_name].reset(current_pose)
+                    filtered_target = target_filters[ee_frame_name].update(
+                        target_poses[ee_frame_name],
+                        dt,
+                    )
+                    frame_task.setTargetFrameTransform(filtered_target)
+                else:
+                    frame_task.setTargetFrameTransform(target_poses[ee_frame_name])
 
             # --- Solve OInK and integrate ---
             try:

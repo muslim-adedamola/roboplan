@@ -45,7 +45,6 @@ from pinocchio.visualize import ViserVisualizer
 from pynput import keyboard
 
 from common import (
-    RobotModelConfig,
     get_home_configuration,
     get_model_data,
     se3_to_viser_wxyz,

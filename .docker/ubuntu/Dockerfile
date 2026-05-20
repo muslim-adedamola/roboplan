@@ -20,6 +20,7 @@ RUN pip3 install \
     opencv-contrib-python-headless \
     pin==${PINOCCHIO_VERSION} \
     plyfile \
+    pynput \
     tyro \
     "viser>=1.0.1,<1.0.25" \
     xacro

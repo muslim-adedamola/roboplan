@@ -1,6 +1,8 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <string>
+#include <unordered_map>
 
 #include <tl/expected.hpp>
 
@@ -59,6 +61,7 @@ Scene::Scene(const std::string& name, const std::string& urdf, const std::string
 
   // Single model with Pinocchio native mimics
   pinocchio::urdf::buildModelFromXML(urdf, model_, /*verbose*/ false, /*mimic*/ true);
+  const auto urdf_extended_limits = parseUrdfExtendedJointLimits(urdf);
 
   YAML::Node yaml_config;
   if (!yaml_config_path.empty() && !std::filesystem::is_directory(yaml_config_path)) {
@@ -149,6 +152,7 @@ Scene::Scene(const std::string& name, const std::string& urdf, const std::string
         }
       }
     }
+    const auto urdf_extended_it = urdf_extended_limits.find(joint_name);
     for (int idx = 0; idx < joint.nv(); ++idx) {
       if (maybe_vel_limits) {
         info.limits.max_velocity[idx] = maybe_vel_limits.value()[idx].as<double>();
@@ -157,9 +161,15 @@ Scene::Scene(const std::string& name, const std::string& urdf, const std::string
       }
       if (maybe_acc_limits) {
         info.limits.max_acceleration[idx] = maybe_acc_limits.value()[idx].as<double>();
+      } else if (urdf_extended_it != urdf_extended_limits.end() &&
+                 urdf_extended_it->second.acceleration.has_value()) {
+        info.limits.max_acceleration[idx] = urdf_extended_it->second.acceleration.value();
       }
       if (maybe_jerk_limits) {
         info.limits.max_jerk[idx] = maybe_jerk_limits.value()[idx].as<double>();
+      } else if (urdf_extended_it != urdf_extended_limits.end() &&
+                 urdf_extended_it->second.jerk.has_value()) {
+        info.limits.max_jerk[idx] = urdf_extended_it->second.jerk.value();
       }
       ++v_idx;
     }

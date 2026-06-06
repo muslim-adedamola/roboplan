@@ -161,13 +161,25 @@ public:
                                     const std::string& base_frame = "") const;
 
   /// @brief Computes the frame Jacobian for a specific frame.
+  /// @details When base_frame_id is provided, computes the relative Jacobian of the EE frame
+  /// with respect to the base frame. The output velocity is expressed in the reference frame
+  /// of the relative transform T_rel = T_base^{-1} * T_ee. When base_frame_id is nullopt,
+  /// falls back to the standard Pinocchio Jacobian (world-rooted).
+  /// @note Requires that forward kinematics and frame placements are up-to-date, or that
+  /// this is the first kinematics call for the given q (the underlying Pinocchio call runs FK).
   /// @param q The joint configuration.
-  /// @param frame_id The Pinocchio frame ID.
-  /// @param reference_frame The reference frame for the Jacobian (LOCAL or WORLD).
+  /// @param frame_id The Pinocchio frame ID of the end-effector frame.
+  /// @param reference_frame The reference frame for the Jacobian output (LOCAL, WORLD, or
+  /// LOCAL_WORLD_ALIGNED). For relative Jacobians, LOCAL is expressed in the body frame of
+  /// T_rel, and LOCAL_WORLD_ALIGNED is at the T_rel origin with world orientation.
   /// @param jacobian Output matrix to store the Jacobian (must be pre-allocated to 6 x nv).
-  void computeFrameJacobian(const Eigen::VectorXd& q, pinocchio::FrameIndex frame_id,
-                            pinocchio::ReferenceFrame reference_frame,
-                            Eigen::Ref<Eigen::MatrixXd> jacobian) const;
+  /// @param base_frame_id Optional Pinocchio frame ID of the base frame. If set, returns the
+  /// Jacobian of the EE velocity relative to the base frame. Defaults to std::nullopt.
+  void
+  computeFrameJacobian(const Eigen::VectorXd& q, pinocchio::FrameIndex frame_id,
+                       pinocchio::ReferenceFrame reference_frame,
+                       Eigen::Ref<Eigen::MatrixXd> jacobian,
+                       std::optional<pinocchio::FrameIndex> base_frame_id = std::nullopt) const;
 
   /// @brief Computes the joint Jacobians for every joint at the given configuration.
   /// @details Populates the internal Pinocchio data so that pinocchio::getJointJacobian

@@ -507,8 +507,72 @@ Eigen::Matrix4d Scene::forwardKinematics(const Eigen::VectorXd& q, const std::st
 
 void Scene::computeFrameJacobian(const Eigen::VectorXd& q, pinocchio::FrameIndex frame_id,
                                  pinocchio::ReferenceFrame reference_frame,
-                                 Eigen::Ref<Eigen::MatrixXd> jacobian) const {
-  pinocchio::computeFrameJacobian(model_, model_data_, q, frame_id, reference_frame, jacobian);
+                                 Eigen::Ref<Eigen::MatrixXd> jacobian,
+                                 std::optional<pinocchio::FrameIndex> base_frame_id) const {
+  if (!base_frame_id.has_value()) {
+    pinocchio::computeFrameJacobian(model_, model_data_, q, frame_id, reference_frame, jacobian);
+    return;
+  }
+
+  const pinocchio::FrameIndex base_id = base_frame_id.value();
+
+  // Compute both Jacobians in LOCAL_WORLD_ALIGNED (world orientation, body origin).
+  // This avoids toActionMatrix() convention issues between Pinocchio versions.
+  Eigen::MatrixXd J_ee_lwa = Eigen::MatrixXd::Zero(6, model_.nv);
+  Eigen::MatrixXd J_base_lwa = Eigen::MatrixXd::Zero(6, model_.nv);
+  pinocchio::computeFrameJacobian(model_, model_data_, q, frame_id, pinocchio::LOCAL_WORLD_ALIGNED,
+                                  J_ee_lwa);
+  pinocchio::computeFrameJacobian(model_, model_data_, q, base_id, pinocchio::LOCAL_WORLD_ALIGNED,
+                                  J_base_lwa);
+
+  // Copy oMf immediately after each call that sets it (avoids stale references).
+  const pinocchio::SE3 T_ee = model_data_.oMf.at(frame_id);
+  const pinocchio::SE3 T_base = model_data_.oMf.at(base_id);
+
+  // World-frame relative Jacobian (at EE origin, world orientation):
+  //
+  //   v_rel_lin = v_ee_lin - v_base_lin - omega_base x (p_ee - p_base)
+  //             = J_ee_lwa_lin - J_base_lwa_lin + skew(dp) * J_base_lwa_ang
+  //   omega_rel = J_ee_lwa_ang - J_base_lwa_ang
+  //
+  // where dp = p_ee - p_base and skew(dp)*w = dp x w = -(w x dp).
+  //
+  // Guaranteed properties:
+  //   - Joints upstream of both frames (rigid motion)  -> J_rel = 0.
+  //   - Joints that do not affect the base frame       -> J_rel = J_ee_abs.
+  const Eigen::Vector3d dp = T_ee.translation() - T_base.translation();
+
+  Eigen::MatrixXd J_rel_lwa(6, model_.nv);
+  J_rel_lwa.topRows<3>() =
+      J_ee_lwa.topRows<3>() - J_base_lwa.topRows<3>() +
+      (Eigen::Matrix3d() << 0., -dp.z(), dp.y(), dp.z(), 0., -dp.x(), -dp.y(), dp.x(), 0.)
+              .finished() *
+          J_base_lwa.bottomRows<3>();
+  J_rel_lwa.bottomRows<3>() = J_ee_lwa.bottomRows<3>() - J_base_lwa.bottomRows<3>();
+
+  // Convert to the requested reference frame.
+  const pinocchio::SE3 T_rel = T_base.actInv(T_ee);
+  const Eigen::Matrix3d& R_rel = T_rel.rotation();
+
+  switch (reference_frame) {
+  case pinocchio::LOCAL_WORLD_ALIGNED:
+    jacobian = J_rel_lwa;
+    break;
+  case pinocchio::LOCAL:
+    jacobian.topRows<3>() = R_rel.transpose() * J_rel_lwa.topRows<3>();
+    jacobian.bottomRows<3>() = R_rel.transpose() * J_rel_lwa.bottomRows<3>();
+    break;
+  case pinocchio::WORLD: {
+    // Shift from EE origin to world origin: v_world = v_lwa - omega x p_ee.
+    const Eigen::Vector3d& p = T_ee.translation();
+    jacobian.topRows<3>() =
+        J_rel_lwa.topRows<3>() -
+        (Eigen::Matrix3d() << 0., -p.z(), p.y(), p.z(), 0., -p.x(), -p.y(), p.x(), 0.).finished() *
+            J_rel_lwa.bottomRows<3>();
+    jacobian.bottomRows<3>() = J_rel_lwa.bottomRows<3>();
+    break;
+  }
+  }
 }
 
 void Scene::computeJointJacobians(const Eigen::VectorXd& q) const {

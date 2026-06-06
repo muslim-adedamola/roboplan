@@ -446,8 +446,10 @@ class Scene:
     def forwardKinematics(self, q: Annotated[NDArray[numpy.float64], dict(shape=(None,), order='C')], frame_name: str, base_frame: str = '') -> Annotated[NDArray[numpy.float64], dict(shape=(4, 4), order='F')]:
         """Calculates forward kinematics for a specific frame."""
 
-    def computeFrameJacobian(self, q: Annotated[NDArray[numpy.float64], dict(shape=(None,), order='C')], frame_name: str, local: bool = True) -> Annotated[NDArray[numpy.float64], dict(shape=(None, None), order='F')]:
-        """Computes the frame Jacobian for a specific frame."""
+    def computeFrameJacobian(self, q: Annotated[NDArray[numpy.float64], dict(shape=(None,), order='C')], frame_name: str, local: bool = True, base_frame: str = '') -> Annotated[NDArray[numpy.float64], dict(shape=(None, None), order='F')]:
+        """
+        Computes the frame Jacobian for a specific frame. If base_frame is non-empty, returns the Jacobian of the EE velocity relative to the base frame.
+        """
 
     def getFrameId(self, name: str) -> int:
         """Get the Pinocchio model ID of a frame by its name."""

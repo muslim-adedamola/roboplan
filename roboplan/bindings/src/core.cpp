@@ -225,8 +225,8 @@ void init_core_scene(nanobind::module_& m) {
            "base_frame"_a = "")
       .def(
           "computeFrameJacobian",
-          [](const Scene& self, const Eigen::VectorXd& q, const std::string& frame_name,
-             bool local) -> Eigen::MatrixXd {
+          [](const Scene& self, const Eigen::VectorXd& q, const std::string& frame_name, bool local,
+             const std::string& base_frame) -> Eigen::MatrixXd {
             const auto maybe_frame_id = self.getFrameId(frame_name);
             if (!maybe_frame_id) {
               throw std::runtime_error("Frame '" + frame_name +
@@ -234,12 +234,25 @@ void init_core_scene(nanobind::module_& m) {
             }
             const auto reference_frame =
                 local ? pinocchio::ReferenceFrame::LOCAL : pinocchio::ReferenceFrame::WORLD;
+
+            std::optional<pinocchio::FrameIndex> base_frame_id = std::nullopt;
+            if (!base_frame.empty()) {
+              const auto maybe_base_id = self.getFrameId(base_frame);
+              if (!maybe_base_id) {
+                throw std::runtime_error("Base frame '" + base_frame +
+                                         "' not found: " + maybe_base_id.error());
+              }
+              base_frame_id = maybe_base_id.value();
+            }
+
             Eigen::MatrixXd jacobian = Eigen::MatrixXd::Zero(6, self.getModel().nv);
-            self.computeFrameJacobian(q, maybe_frame_id.value(), reference_frame, jacobian);
+            self.computeFrameJacobian(q, maybe_frame_id.value(), reference_frame, jacobian,
+                                      base_frame_id);
             return jacobian;
           },
-          "Computes the frame Jacobian for a specific frame.", "q"_a, "frame_name"_a,
-          "local"_a = true)
+          "Computes the frame Jacobian for a specific frame. If base_frame is non-empty, "
+          "returns the Jacobian of the EE velocity relative to the base frame.",
+          "q"_a, "frame_name"_a, "local"_a = true, "base_frame"_a = "")
       .def("getFrameId", unwrap_expected(&Scene::getFrameId),
            "Get the Pinocchio model ID of a frame by its name.", "name"_a)
       .def("getJointGroupInfo", unwrap_expected(&Scene::getJointGroupInfo),

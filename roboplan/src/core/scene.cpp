@@ -543,14 +543,15 @@ Eigen::Matrix4d Scene::forwardKinematics(const Eigen::VectorXd& q, const std::st
 
 void Scene::computeFrameJacobian(const Eigen::VectorXd& q, pinocchio::FrameIndex frame_id,
                                  pinocchio::ReferenceFrame reference_frame,
-                                 Eigen::Ref<Eigen::MatrixXd> jacobian,
-                                 std::optional<pinocchio::FrameIndex> base_frame_id) const {
-  if (!base_frame_id.has_value()) {
-    pinocchio::computeFrameJacobian(model_, model_data_, q, frame_id, reference_frame, jacobian);
-    return;
-  }
+                                 Eigen::Ref<Eigen::MatrixXd> jacobian) const {
+  pinocchio::computeFrameJacobian(model_, model_data_, q, frame_id, reference_frame, jacobian);
+}
 
-  const pinocchio::FrameIndex base_id = base_frame_id.value();
+void Scene::computeRelativeFrameJacobian(const Eigen::VectorXd& q, pinocchio::FrameIndex frame_id,
+                                         pinocchio::FrameIndex base_frame_id,
+                                         pinocchio::ReferenceFrame reference_frame,
+                                         Eigen::Ref<Eigen::MatrixXd> jacobian) const {
+  const pinocchio::FrameIndex base_id = base_frame_id;
 
   // Compute both Jacobians in LOCAL_WORLD_ALIGNED (world orientation, body origin).
   // This avoids toActionMatrix() convention issues between Pinocchio versions.

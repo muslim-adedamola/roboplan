@@ -7,7 +7,7 @@ Most IK examples define their end-effector targets in the world frame. This demo
 shows what the FrameTask `base_frame` feature buys us: tracking a pose defined
 relative to another frame that is itself moving.
 
-Setup (dual_fr3):
+Setup (--model dual, the dual FR3 arms):
   - The LEFT arm tracks an interactive marker in the world frame (base_frame
     "universe", so the relative Jacobian degenerates to the absolute one).
   - The RIGHT arm's task uses the LEFT hand as its base_frame, and holds a fixed
@@ -39,6 +39,7 @@ from roboplan.optimal_ik import (
     FrameTaskOptions,
     Oink,
     PositionLimit,
+    SelfCollisionBarrier,
     VelocityLimit,
 )
 
@@ -56,6 +57,9 @@ def main(
     regularization: float = 1e-6,
     control_freq: float = 100.0,
     reference_filter_tau: float = 0.1,
+    self_collision_num_pairs: int = 0,
+    self_collision_d_min: float = 0.02,
+    self_collision_gain: float = 1.0,
     host: str = "localhost",
     port: str = "8000",
 ):
@@ -64,13 +68,20 @@ def main(
 
     Parameters:
         model: Model to use. Must expose at least two end-effector frames; the
-            default dual_fr3 model is what this demo is designed around.
+            default "dual" model (dual FR3 arms) is what this demo is designed around.
         task_gain: Task gain (alpha) for the IK solver (0-1).
         lm_damping: Levenberg-Marquardt damping for regularization.
         regularization: Tikhonov regularization weight for the QP Hessian.
         control_freq: Control loop frequency in Hz.
         reference_filter_tau: Time constant (s) for smoothing the marker target.
             Set to 0 to disable.
+        self_collision_num_pairs: Number of collision pairs to use for the solver's
+            self-collision barrier. If zero, no collision barrier will be used.
+            Useful here since the two arms can be dragged into each other.
+        self_collision_d_min: Minimum distance (meters) the IK solver will try to keep
+            between every pair of self-collision bodies declared by the SRDF.
+        self_collision_gain: Barrier gain (gamma) for the self-collision barrier. Higher
+            values produce stronger pushback as bodies approach `self_collision_d_min`.
         host: The host for the ViserVisualizer.
         port: The port for the ViserVisualizer.
     """
@@ -140,6 +151,27 @@ def main(
             ),
         ),
     ]
+
+    # Self-collision barrier: keep every declared collision pair at least
+    # `self_collision_d_min` meters apart. The two arms share a workspace here, so
+    # this is worth enabling to stop them interpenetrating when dragged together.
+    if self_collision_num_pairs > 0:
+        print(
+            f"Self-collision barrier enabled with {self_collision_num_pairs} collision pair(s)."
+        )
+        barriers = [
+            SelfCollisionBarrier(
+                oink,
+                scene,
+                n_collision_pairs=self_collision_num_pairs,
+                dt=dt,
+                gain=self_collision_gain,
+                safe_displacement_gain=0.01,
+                d_min=self_collision_d_min,
+            )
+        ]
+    else:
+        barriers = []
 
     # Regularize toward the starting pose in the nullspace of the frame tasks.
     q_canonical = np.array(model_data.starting_joint_config)
@@ -247,13 +279,20 @@ def main(
 
                     try:
                         oink.solveIk(
-                            scene, tasks, constraints, [], delta_q, regularization
+                            scene, tasks, constraints, barriers, delta_q, regularization
                         )
                     except RuntimeError as exc:
                         delta_q[:] = 0.0
                         print(f"Warning: IK solver failed: {exc}")
 
                     delta_q_full[oink.v_indices] = delta_q
+
+                    # Validate barrier feasibility post-solve and zero delta_q on violation.
+                    if barriers:
+                        oink.enforceBarriers(
+                            scene, barriers, delta_q_full, tolerance=0.0
+                        )
+
                     q_current = scene.integrate(q_current, delta_q_full)
                     scene.setJointPositions(q_current)
 

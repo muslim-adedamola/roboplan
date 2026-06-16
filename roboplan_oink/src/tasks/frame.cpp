@@ -104,12 +104,19 @@ tl::expected<void, std::string> FrameTask::computeJacobian(const Scene& scene) {
   // Get current joint configuration
   const Eigen::VectorXd& q = scene.getCurrentJointPositions();
 
-  // Compute full-robot frame Jacobian, then select the group's velocity columns.
-  // When base_frame_id is set, this returns the relative Jacobian J_rel expressed in
-  // LOCAL_WORLD_ALIGNED, accounting for the base frame's own motion through the joints.
+  // Compute the full-robot frame Jacobian, then select the group's velocity columns.
+  // When a base frame is set, use the relative Jacobian (expressed in LOCAL_WORLD_ALIGNED),
+  // which accounts for the base frame's own motion through the joints; otherwise the
+  // standard world-rooted Jacobian.
   full_jacobian.setZero();
-  scene.computeFrameJacobian(q, frame_id, pinocchio::ReferenceFrame::LOCAL_WORLD_ALIGNED,
-                             full_jacobian, base_frame_id);
+  if (base_frame_id.has_value()) {
+    scene.computeRelativeFrameJacobian(q, frame_id, base_frame_id.value(),
+                                       pinocchio::ReferenceFrame::LOCAL_WORLD_ALIGNED,
+                                       full_jacobian);
+  } else {
+    scene.computeFrameJacobian(q, frame_id, pinocchio::ReferenceFrame::LOCAL_WORLD_ALIGNED,
+                               full_jacobian);
+  }
 
   // The negative sign ensures that with the QP formulation (min ||J*dq + gain*e||^2),
   // the solution dq = -gain * J^{-1} * e moves toward the target.

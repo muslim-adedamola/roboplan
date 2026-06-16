@@ -155,24 +155,6 @@ TEST_F(RoboPlanSceneTest, TestForwardKinematics) {
   EXPECT_TRUE(fk_wrist.isApprox(expected, 1e-6));
 }
 
-TEST_F(RoboPlanSceneTest, TestFrameJacobianBaseFrameBackwardCompat) {
-  // With base_frame_id = nullopt the result must match the original no-base-frame call.
-  Eigen::VectorXd q(6);
-  q << 0.5, -0.5, 1.0, 0.0, 0.3, 0.0;
-
-  const auto maybe_frame_id = scene_->getFrameId("tool0");
-  ASSERT_TRUE(maybe_frame_id.has_value());
-  const pinocchio::FrameIndex frame_id = maybe_frame_id.value();
-
-  Eigen::MatrixXd J_no_base = Eigen::MatrixXd::Zero(6, scene_->getModel().nv);
-  Eigen::MatrixXd J_null_base = Eigen::MatrixXd::Zero(6, scene_->getModel().nv);
-
-  scene_->computeFrameJacobian(q, frame_id, pinocchio::LOCAL, J_no_base);
-  scene_->computeFrameJacobian(q, frame_id, pinocchio::LOCAL, J_null_base, std::nullopt);
-
-  EXPECT_TRUE(J_no_base.isApprox(J_null_base, kTolerance));
-}
-
 TEST_F(RoboPlanSceneTest, TestFrameJacobianSameBaseAndTipIsZero) {
   // When frame_id == base_frame_id the relative Jacobian must be zero: the EE is
   // stationary relative to itself regardless of which joints move.
@@ -185,7 +167,7 @@ TEST_F(RoboPlanSceneTest, TestFrameJacobianSameBaseAndTipIsZero) {
 
   for (auto rf : {pinocchio::LOCAL, pinocchio::LOCAL_WORLD_ALIGNED, pinocchio::WORLD}) {
     Eigen::MatrixXd J = Eigen::MatrixXd::Zero(6, scene_->getModel().nv);
-    scene_->computeFrameJacobian(q, frame_id, rf, J, frame_id);
+    scene_->computeRelativeFrameJacobian(q, frame_id, frame_id, rf, J);
     EXPECT_NEAR(J.norm(), 0.0, kTolerance)
         << "Relative Jacobian should be zero when base frame == tip frame";
   }
@@ -215,7 +197,7 @@ TEST_F(RoboPlanSceneTest, TestFrameJacobianBaseFrameNumerical) {
 
   // Relative Jacobian (tool0 relative to wrist_1_link)
   Eigen::MatrixXd J_rel = Eigen::MatrixXd::Zero(6, nv);
-  scene_->computeFrameJacobian(q, ee_id, pinocchio::LOCAL_WORLD_ALIGNED, J_rel, base_id);
+  scene_->computeRelativeFrameJacobian(q, ee_id, base_id, pinocchio::LOCAL_WORLD_ALIGNED, J_rel);
 
   // Absolute EE Jacobian (no base frame)
   Eigen::MatrixXd J_ee = Eigen::MatrixXd::Zero(6, nv);

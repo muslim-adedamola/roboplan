@@ -3,6 +3,7 @@ install(
   common.py
   example_action_chunk_tracking.py
   example_ik.py
+  example_oink_base_frame_demo.py
   example_oink_position_barriers.py
   example_oink.py
   example_rrt.py

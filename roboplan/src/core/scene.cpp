@@ -529,7 +529,13 @@ void Scene::computeFrameJacobian(const Eigen::VectorXd& q, pinocchio::FrameIndex
   const pinocchio::SE3 T_ee = model_data_.oMf.at(frame_id);
   const pinocchio::SE3 T_base = model_data_.oMf.at(base_id);
 
-  // World-frame relative Jacobian (at EE origin, world orientation):
+  // World-frame relative Jacobian (at EE origin, world orientation).
+  //
+  // This is the transport theorem for the velocity of a point expressed in a moving
+  // frame: the EE velocity relative to the base equals the EE world velocity minus the
+  // base world velocity minus the rigid-body coupling term omega_base x (p_ee - p_base).
+  // Refs: Siciliano et al., "Robotics: Modelling, Planning and Control", Sec. 3.1.1,
+  // Eq. (3.14); Featherstone, "Rigid Body Dynamics Algorithms", Secs. 2.2 and 2.8.
   //
   //   v_rel_lin = v_ee_lin - v_base_lin - omega_base x (p_ee - p_base)
   //             = J_ee_lwa_lin - J_base_lwa_lin + skew(dp) * J_base_lwa_ang

@@ -10,6 +10,7 @@
 #include <pinocchio/algorithm/frames.hpp>
 #include <pinocchio/algorithm/geometry.hpp>
 #include <pinocchio/algorithm/joint-configuration.hpp>
+#include <pinocchio/collision/broadphase-manager.hpp>
 #include <pinocchio/fwd.hpp>
 #include <pinocchio/multibody/data.hpp>
 #include <pinocchio/multibody/geometry.hpp>
@@ -18,6 +19,15 @@
 
 #include <roboplan/core/geometry_wrappers.hpp>
 #include <roboplan/core/types.hpp>
+
+// The concrete broadphase manager (AABB tree). Mirror the coal/hpp-fcl include guard used in
+// geometry_wrappers.hpp so the `coal` namespace resolves in both modern and legacy builds.
+#if defined(__has_include) && __has_include(<coal/fwd.hh>)
+#include <coal/broadphase/broadphase_dynamic_AABB_tree.h>
+#else
+#include <hpp/fcl/broadphase/broadphase_dynamic_AABB_tree.h>
+namespace coal = hpp::fcl;
+#endif
 
 namespace roboplan {
 
@@ -106,6 +116,14 @@ public:
   /// @brief Generates random positions for the robot model.
   /// @return The random positions.
   Eigen::VectorXd randomPositions();
+
+  /// @brief Randomizes the positions of the specified joints in-place within a full configuration.
+  /// @details Only the degrees of freedom belonging to `joint_names` are overwritten; all other
+  /// entries of `q` are left untouched. This avoids allocating a full configuration and sampling
+  /// joints outside of a planning group on every call (e.g. in the RRT sampling loop).
+  /// @param joint_names The names of the joints to randomize.
+  /// @param q The full configuration vector to modify in-place. Must be sized to the model's nq.
+  void randomizeJointPositions(const std::vector<std::string>& joint_names, Eigen::VectorXd& q);
 
   /// @brief Generates random collision-free positions for the robot model.
   /// @param max_tries The maximum number of samples to attempt.
@@ -363,6 +381,23 @@ private:
   /// @brief The default data structure for the underlying Pinocchio collision model.
   /// @details This won't be thread-safe unless each thread uses its own data.
   mutable pinocchio::GeometryData collision_model_data_;
+
+  /// @brief Broadphase collision manager type, using a dynamic AABB tree to cull non-overlapping
+  /// geometry pairs before narrow-phase collision checking.
+  using BroadPhaseManager = pinocchio::BroadPhaseManagerTpl<coal::DynamicAABBTreeCollisionManager>;
+
+  /// @brief Broadphase manager used to accelerate hasCollisions().
+  /// @details Caches AABB-tree state and holds pointers into collision_model_ and
+  /// collision_model_data_, so it must be rebuilt (see rebuildBroadphaseManager) whenever the
+  /// collision geometry or its data is changed. Mutable for the same reason as
+  /// collision_model_data_ (updated in place during a const collision query), and not thread-safe
+  /// across shared Scenes.
+  mutable std::optional<BroadPhaseManager> broadphase_manager_;
+
+  /// @brief (Re)builds broadphase_manager_ from the current collision model and data.
+  /// @details Must be called after collision_model_data_ is (re)assigned, since the manager caches
+  /// pointers and geometry state derived from it.
+  void rebuildBroadphaseManager();
 
   /// @brief The full list of joint names in the model (including mimic joints).
   std::vector<std::string> joint_names_;

@@ -366,4 +366,43 @@ Eigen::VectorXd jointPositionsWithMimicsFromPinocchio(const Scene& scene,
   return positions;
 }
 
+std::unordered_map<std::string, UrdfExtendedJointLimits>
+parseUrdfExtendedJointLimits(const std::string& urdf) {
+  std::unordered_map<std::string, UrdfExtendedJointLimits> result;
+
+  tinyxml2::XMLDocument doc;
+  if (doc.Parse(urdf.c_str()) != tinyxml2::XML_SUCCESS) {
+    return result;
+  }
+
+  const tinyxml2::XMLElement* robot = doc.FirstChildElement("robot");
+  if (!robot) {
+    return result;
+  }
+
+  for (const tinyxml2::XMLElement* joint = robot->FirstChildElement("joint"); joint;
+       joint = joint->NextSiblingElement("joint")) {
+    const char* name = joint->Attribute("name");
+    if (!name) {
+      continue;
+    }
+    const tinyxml2::XMLElement* limit = joint->FirstChildElement("limit");
+    if (!limit) {
+      continue;
+    }
+
+    UrdfExtendedJointLimits limits;
+    double val = 0.0;
+    if (limit->QueryDoubleAttribute("acceleration", &val) == tinyxml2::XML_SUCCESS) {
+      limits.acceleration = val;
+    }
+    if (limit->QueryDoubleAttribute("jerk", &val) == tinyxml2::XML_SUCCESS) {
+      limits.jerk = val;
+    }
+    result.emplace(name, limits);
+  }
+
+  return result;
+}
+
 }  // namespace roboplan

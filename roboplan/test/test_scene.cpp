@@ -167,7 +167,7 @@ TEST_F(RoboPlanSceneTest, TestFrameJacobianSameBaseAndTipIsZero) {
 
   for (auto rf : {pinocchio::LOCAL, pinocchio::LOCAL_WORLD_ALIGNED, pinocchio::WORLD}) {
     Eigen::MatrixXd J = Eigen::MatrixXd::Zero(6, scene_->getModel().nv);
-    scene_->computeRelativeFrameJacobian(q, frame_id, frame_id, rf, J);
+    scene_->computeRelativeFrameJacobian(q, frame_id, "tool0", rf, J);
     EXPECT_NEAR(J.norm(), 0.0, kTolerance)
         << "Relative Jacobian should be zero when base frame == tip frame";
   }
@@ -193,11 +193,11 @@ TEST_F(RoboPlanSceneTest, TestFrameJacobianBaseFrameNumerical) {
   ASSERT_TRUE(maybe_ee_id.has_value());
   ASSERT_TRUE(maybe_base_id.has_value());
   const pinocchio::FrameIndex ee_id = maybe_ee_id.value();
-  const pinocchio::FrameIndex base_id = maybe_base_id.value();
 
   // Relative Jacobian (tool0 relative to wrist_1_link)
   Eigen::MatrixXd J_rel = Eigen::MatrixXd::Zero(6, nv);
-  scene_->computeRelativeFrameJacobian(q, ee_id, base_id, pinocchio::LOCAL_WORLD_ALIGNED, J_rel);
+  scene_->computeRelativeFrameJacobian(q, ee_id, "wrist_1_link", pinocchio::LOCAL_WORLD_ALIGNED,
+                                       J_rel);
 
   // Absolute EE Jacobian (no base frame)
   Eigen::MatrixXd J_ee = Eigen::MatrixXd::Zero(6, nv);

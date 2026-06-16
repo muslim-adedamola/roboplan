@@ -250,16 +250,11 @@ void init_core_scene(nanobind::module_& m) {
               throw std::runtime_error("Frame '" + frame_name +
                                        "' not found: " + maybe_frame_id.error());
             }
-            const auto maybe_base_id = self.getFrameId(base_frame);
-            if (!maybe_base_id) {
-              throw std::runtime_error("Base frame '" + base_frame +
-                                       "' not found: " + maybe_base_id.error());
-            }
             const auto reference_frame =
                 local ? pinocchio::ReferenceFrame::LOCAL : pinocchio::ReferenceFrame::WORLD;
 
             Eigen::MatrixXd jacobian = Eigen::MatrixXd::Zero(6, self.getModel().nv);
-            self.computeRelativeFrameJacobian(q, maybe_frame_id.value(), maybe_base_id.value(),
+            self.computeRelativeFrameJacobian(q, maybe_frame_id.value(), base_frame,
                                               reference_frame, jacobian);
             return jacobian;
           },

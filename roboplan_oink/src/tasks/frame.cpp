@@ -110,7 +110,7 @@ tl::expected<void, std::string> FrameTask::computeJacobian(const Scene& scene) {
   // standard world-rooted Jacobian.
   full_jacobian.setZero();
   if (base_frame_id.has_value()) {
-    scene.computeRelativeFrameJacobian(q, frame_id, base_frame_id.value(),
+    scene.computeRelativeFrameJacobian(q, frame_id, target_pose.base_frame,
                                        pinocchio::ReferenceFrame::LOCAL_WORLD_ALIGNED,
                                        full_jacobian);
   } else {

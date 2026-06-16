@@ -197,12 +197,12 @@ public:
   /// this is the first kinematics call for the given q (the underlying Pinocchio call runs FK).
   /// @param q The joint configuration.
   /// @param frame_id The Pinocchio frame ID of the end-effector frame.
-  /// @param base_frame_id The Pinocchio frame ID of the base frame.
+  /// @param base_frame The name of the base frame (its ID is looked up internally).
   /// @param reference_frame The reference frame for the Jacobian output. LOCAL is expressed in the
   /// body frame of T_rel; LOCAL_WORLD_ALIGNED is at the T_rel origin with world orientation.
   /// @param jacobian Output matrix to store the Jacobian (must be pre-allocated to 6 x nv).
   void computeRelativeFrameJacobian(const Eigen::VectorXd& q, pinocchio::FrameIndex frame_id,
-                                    pinocchio::FrameIndex base_frame_id,
+                                    const std::string& base_frame,
                                     pinocchio::ReferenceFrame reference_frame,
                                     Eigen::Ref<Eigen::MatrixXd> jacobian) const;
 

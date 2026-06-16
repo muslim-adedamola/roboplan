@@ -548,10 +548,14 @@ void Scene::computeFrameJacobian(const Eigen::VectorXd& q, pinocchio::FrameIndex
 }
 
 void Scene::computeRelativeFrameJacobian(const Eigen::VectorXd& q, pinocchio::FrameIndex frame_id,
-                                         pinocchio::FrameIndex base_frame_id,
+                                         const std::string& base_frame,
                                          pinocchio::ReferenceFrame reference_frame,
                                          Eigen::Ref<Eigen::MatrixXd> jacobian) const {
-  const pinocchio::FrameIndex base_id = base_frame_id;
+  const auto maybe_base_id = getFrameId(base_frame);
+  if (!maybe_base_id) {
+    throw std::runtime_error("Failed to get base frame ID: " + maybe_base_id.error());
+  }
+  const pinocchio::FrameIndex base_id = maybe_base_id.value();
 
   // Compute both Jacobians in LOCAL_WORLD_ALIGNED (world orientation, body origin).
   // This avoids toActionMatrix() convention issues between Pinocchio versions.

@@ -239,8 +239,8 @@ void init_core_scene(nanobind::module_& m) {
             self.computeFrameJacobian(q, maybe_frame_id.value(), reference_frame, jacobian);
             return jacobian;
           },
-          "Computes the world-rooted frame Jacobian for a specific frame.", "q"_a, "frame_name"_a,
-          "local"_a = true)
+          "Computes the frame Jacobian for a specific frame, expressed in world frame.", "q"_a,
+          "frame_name"_a, "local"_a = true)
       .def(
           "computeRelativeFrameJacobian",
           [](const Scene& self, const Eigen::VectorXd& q, const std::string& frame_name,

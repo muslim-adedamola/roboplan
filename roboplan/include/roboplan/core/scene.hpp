@@ -178,7 +178,7 @@ public:
   Eigen::Matrix4d forwardKinematics(const Eigen::VectorXd& q, const std::string& frame_name,
                                     const std::string& base_frame = "") const;
 
-  /// @brief Computes the world-rooted frame Jacobian for a specific frame.
+  /// @brief Computes the frame Jacobian for a specific frame expressed in world frame.
   /// @note Requires that forward kinematics and frame placements are up-to-date, or that
   /// this is the first kinematics call for the given q (the underlying Pinocchio call runs FK).
   /// @param q The joint configuration.

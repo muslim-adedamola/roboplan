@@ -447,7 +447,9 @@ class Scene:
         """Calculates forward kinematics for a specific frame."""
 
     def computeFrameJacobian(self, q: Annotated[NDArray[numpy.float64], dict(shape=(None,), order='C')], frame_name: str, local: bool = True) -> Annotated[NDArray[numpy.float64], dict(shape=(None, None), order='F')]:
-        """Computes the world-rooted frame Jacobian for a specific frame."""
+        """
+        Computes the frame Jacobian for a specific frame, expressed in world frame.
+        """
 
     def computeRelativeFrameJacobian(self, q: Annotated[NDArray[numpy.float64], dict(shape=(None,), order='C')], frame_name: str, base_frame: str, local: bool = True) -> Annotated[NDArray[numpy.float64], dict(shape=(None, None), order='F')]:
         """Computes the Jacobian of a frame's velocity relative to a base frame."""

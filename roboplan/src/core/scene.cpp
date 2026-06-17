@@ -566,9 +566,9 @@ void Scene::computeRelativeFrameJacobian(const Eigen::VectorXd& q, pinocchio::Fr
   pinocchio::computeFrameJacobian(model_, model_data_, q, base_id, pinocchio::LOCAL_WORLD_ALIGNED,
                                   J_base_lwa);
 
-  // Copy oMf immediately after each call that sets it (avoids stale references).
-  const pinocchio::SE3 T_ee = model_data_.oMf.at(frame_id);
-  const pinocchio::SE3 T_base = model_data_.oMf.at(base_id);
+  // oMf for both frames was populated by the computeFrameJacobian calls above
+  const pinocchio::SE3& T_ee = model_data_.oMf.at(frame_id);
+  const pinocchio::SE3& T_base = model_data_.oMf.at(base_id);
 
   // World-frame relative Jacobian (at EE origin, world orientation).
   //
